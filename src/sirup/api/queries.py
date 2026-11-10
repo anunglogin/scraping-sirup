@@ -83,9 +83,16 @@ class PaketFilter:
         return sql.SQL(" AND ").join(clauses), params
 
 
-def count_query(f: PaketFilter) -> tuple[sql.Composable, list[Any]]:
+def count_query(f: PaketFilter, cap: int) -> tuple[sql.Composable, list[Any]]:
+    """Count matches, but stop after ``cap`` rows.
+
+    An exact count of a broad filter means scanning millions of rows (seconds);
+    since only the first 10,000 results can be paged anyway, counting further
+    adds nothing. The caller treats ``cap`` as "more than cap - 1".
+    """
     where, params = f.where()
-    return sql.SQL("SELECT count(*) FROM paket WHERE {}").format(where), params
+    query = sql.SQL("SELECT count(*) FROM (SELECT 1 FROM paket WHERE {} LIMIT %s) AS capped")
+    return query.format(where), [*params, cap]
 
 
 def list_query(
@@ -101,9 +108,10 @@ def list_query(
     return composed, [*params, limit, offset]
 
 
-DETAIL_QUERY = sql.SQL("SELECT {cols}, raw FROM paket WHERE id = %s").format(
-    cols=sql.SQL(", ").join(map(sql.Identifier, LIST_COLUMNS))
-)
+DETAIL_QUERY = sql.SQL(
+    "SELECT {cols}, coalesce(r.raw, '{{}}'::jsonb) AS raw "
+    "FROM paket p LEFT JOIN paket_raw r ON r.id = p.id WHERE p.id = %s"
+).format(cols=sql.SQL(", ").join(sql.Identifier("p", c) for c in LIST_COLUMNS))
 
 RUNS_QUERY = sql.SQL(
     "SELECT id, tahun_anggaran, status, started_at, finished_at, records_total, rows_received, "

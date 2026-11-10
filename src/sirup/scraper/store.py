@@ -23,7 +23,9 @@ RESUME_WINDOW = "24 hours"
 MIN_COMPLETENESS = 0.99
 MAX_TOTAL_DROP = 0.20
 
-_UPDATE_COLUMNS = [c for c in COPY_COLUMNS if c != "id"]
+# ``raw`` lives in its own table (paket_raw, migration 0003); the rest in paket.
+_PAKET_COLUMNS = [c for c in COPY_COLUMNS if c != "raw"]
+_UPDATE_COLUMNS = [c for c in _PAKET_COLUMNS if c != "id"]
 
 
 class ScrapeAlreadyRunningError(RuntimeError):
@@ -93,7 +95,7 @@ class Store:
                 raise ScrapeAlreadyRunningError("another scrape run is in progress")
             conn.execute(
                 "CREATE TEMP TABLE IF NOT EXISTS staging_paket "
-                "(LIKE paket INCLUDING DEFAULTS) ON COMMIT DELETE ROWS"
+                "(LIKE paket INCLUDING DEFAULTS, raw jsonb NOT NULL) ON COMMIT DELETE ROWS"
             )
         except BaseException:
             conn.close()
@@ -195,19 +197,32 @@ class Store:
                         values = list(r.to_copy_values(run.tahun_anggaran))
                         values[-1] = Jsonb(values[-1])
                         copy.write_row(values)
-                cols = sql.SQL(", ").join(map(sql.Identifier, COPY_COLUMNS))
+                cols = sql.SQL(", ").join(map(sql.Identifier, _PAKET_COLUMNS))
                 updates = sql.SQL(", ").join(
                     sql.SQL("{c} = EXCLUDED.{c}").format(c=sql.Identifier(c))
                     for c in _UPDATE_COLUMNS
                 )
+                # 1) upsert the original rows; RETURNING lists ids whose raw row is
+                #    new or different. 2) upsert paket; updated_at moves only for
+                #    those ids, so it means "content changed".
                 upsert = sql.SQL(
                     """
+                    WITH src AS MATERIALIZED (
+                        SELECT DISTINCT ON (id) * FROM staging_paket ORDER BY id
+                    ),
+                    changed_raw AS (
+                        INSERT INTO paket_raw (id, raw)
+                        SELECT id, raw FROM src
+                        ON CONFLICT (id) DO UPDATE SET raw = EXCLUDED.raw
+                            WHERE paket_raw.raw IS DISTINCT FROM EXCLUDED.raw
+                        RETURNING id
+                    )
                     INSERT INTO paket ({cols})
-                    SELECT DISTINCT ON (id) {cols} FROM staging_paket ORDER BY id
+                    SELECT {cols} FROM src
                     ON CONFLICT (id) DO UPDATE SET {updates},
                         is_active = true,
                         last_seen_at = now(),
-                        updated_at = CASE WHEN paket.raw IS DISTINCT FROM EXCLUDED.raw
+                        updated_at = CASE WHEN EXCLUDED.id IN (SELECT id FROM changed_raw)
                                           THEN now() ELSE paket.updated_at END
                     RETURNING (xmax = 0) AS inserted, (updated_at = now()) AS touched
                     """

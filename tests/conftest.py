@@ -165,5 +165,5 @@ def db_url() -> str:
 @pytest.fixture
 def db(db_url: str) -> Iterator[psycopg.Connection]:
     with psycopg.connect(db_url, autocommit=True) as conn:
-        conn.execute("TRUNCATE paket, scrape_runs RESTART IDENTITY")
+        conn.execute("TRUNCATE paket, paket_raw, scrape_runs RESTART IDENTITY")
         yield conn

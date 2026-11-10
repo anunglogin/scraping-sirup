@@ -37,11 +37,25 @@ def seeded(db) -> None:
             cur.execute(
                 """
                 INSERT INTO paket (id, tahun_anggaran, nama_paket, pagu, id_jenis_pengadaan,
-                    jenis_pengadaan, id_bulan, satuan_kerja, raw, is_active, first_seen_at)
-                VALUES (%s, %s, %s, %s, 1, 'Barang', %s, %s, %s, %s,
+                    jenis_pengadaan, id_bulan, satuan_kerja, is_active, first_seen_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
                         now() - make_interval(hours => %s))
                 """,
-                (pid, tahun, nama, pagu, bulan, satker, json.dumps({"id": pid}), active, 100 - i),
+                (
+                    pid,
+                    tahun,
+                    nama,
+                    pagu,
+                    None if pid == 7 else 1,  # SIRUP has packages without a type
+                    None if pid == 7 else "Barang",
+                    bulan,
+                    satker,
+                    active,
+                    100 - i,
+                ),
+            )
+            cur.execute(
+                "INSERT INTO paket_raw (id, raw) VALUES (%s, %s)", (pid, json.dumps({"id": pid}))
             )
         cur.execute(
             "INSERT INTO scrape_runs (tahun_anggaran, status, records_total) "
@@ -259,3 +273,47 @@ def test_openapi_documents_security_and_parameters(client):
 def test_swagger_and_redoc_pages(client):
     assert client.get("/docs").status_code == 200
     assert client.get("/redoc").status_code == 200
+
+
+def test_package_without_jenis_is_served(client, seeded):
+    body = client.get("/v1/paket/7", headers=H).json()
+    assert body["id_jenis_pengadaan"] is None and body["jenis_pengadaan"] is None
+
+
+def test_exact_total_below_cap(client, seeded):
+    body = search(client, paket="laptop").json()
+    assert body["total"] == 2 and body["total_terbatas"] is False
+
+
+@pytest.fixture
+def many(db) -> None:
+    """10,050 packages in 2027 to exercise the 10,000 count cap."""
+    db.execute(
+        """
+        INSERT INTO paket (id, tahun_anggaran, nama_paket, pagu, id_bulan, satuan_kerja)
+        SELECT 100000 + g, 2027,
+               CASE WHEN g <= 30 THEN 'Langka ' ELSE 'Umum ' END || g,
+               g * 1000, 1 + g % 12, 'Satker ' || (g % 7)
+        FROM generate_series(1, 10050) AS g
+        """
+    )
+
+
+def test_total_is_capped_at_10000(client, many):
+    body = client.get("/v1/paket", params={"tahun": 2027, "size": 5}, headers=H).json()
+    assert body["total"] == 10000 and body["total_terbatas"] is True
+    assert [p["id"] for p in body["data"]] == [110050, 110049, 110048, 110047, 110046]
+    narrow = client.get("/v1/paket", params={"tahun": 2027, "paket": "langka"}, headers=H)
+    assert narrow.json()["total"] == 30 and narrow.json()["total_terbatas"] is False
+
+
+def test_last_reachable_page_when_capped(client, many):
+    params = {"tahun": 2027, "page": 100, "size": 100, "sort": "pagu_asc"}
+    body = client.get("/v1/paket", params=params, headers=H).json()
+    assert body["total_terbatas"] is True
+    assert body["data"][0]["id"] == 100000 + 9901 and len(body["data"]) == 100
+
+
+def test_openapi_documents_total_terbatas(client):
+    props = client.get("/openapi.json").json()["components"]["schemas"]["PaketPage"]["properties"]
+    assert "lebih dari 10.000" in props["total_terbatas"]["description"]

@@ -90,11 +90,25 @@ class PaketPage(BaseModel):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "example": {"total": 1234, "page": 1, "size": 20, "data": [_PAKET_EXAMPLE]}
+            "example": {
+                "total": 1234,
+                "total_terbatas": False,
+                "page": 1,
+                "size": 20,
+                "data": [_PAKET_EXAMPLE],
+            }
         }
     )
 
-    total: int = Field(description="Jumlah seluruh paket yang cocok dengan filter.")
+    total: int = Field(
+        description="Jumlah paket yang cocok dengan filter, dihitung sampai 10.000. Bila "
+        "`total_terbatas` = true, jumlah sebenarnya **lebih dari 10.000**."
+    )
+    total_terbatas: bool = Field(
+        description="`true` bila paket yang cocok lebih dari 10.000 (angka `total` "
+        "berhenti di 10.000 supaya pencarian tetap cepat). Persempit filter untuk "
+        "angka yang pasti."
+    )
     page: int = Field(description="Nomor halaman yang dikirim.")
     size: int = Field(description="Jumlah paket per halaman.")
     data: list[Paket] = Field(description="Daftar paket di halaman ini.")

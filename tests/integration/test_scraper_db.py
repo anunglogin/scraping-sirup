@@ -11,7 +11,7 @@ from sirup.scraper.client import Page, SirupUnavailableError
 from sirup.scraper.config import ScraperSettings
 from sirup.scraper.runner import TooManyInvalidRowsError, run_scrape
 from sirup.scraper.store import ScrapeAlreadyRunningError, Store
-from tests.conftest import make_row
+from tests.conftest import REAL_ROW_WITHOUT_JENIS, make_row
 
 YEAR = 2026
 
@@ -84,7 +84,8 @@ def test_full_scrape_stores_everything_and_logs_run(db, db_url):  # AC-01, AC-11
     assert run["checkpoint_start"] == 25
     assert run["error"] is None and run["note"] is None
     row = db.execute(
-        "SELECT tahun_anggaran, nama_paket, raw->>'paket', is_active FROM paket WHERE id = 1003"
+        "SELECT p.tahun_anggaran, p.nama_paket, r.raw->>'paket', p.is_active "
+        "FROM paket p JOIN paket_raw r USING (id) WHERE id = 1003"
     ).fetchone()
     assert row == (YEAR, "Pengadaan barang nomor 3", "Pengadaan barang nomor 3", True)
 
@@ -124,7 +125,8 @@ def test_changed_pagu_updates_updated_at_only_for_that_row(db, db_url):
     changed = [k for k in after if after[k] != before[k]]
     assert changed == [1005]
     assert db.execute(
-        "SELECT pagu, raw->>'pagu', first_seen_at FROM paket WHERE id = 1005"
+        "SELECT p.pagu, r.raw->>'pagu', p.first_seen_at "
+        "FROM paket p JOIN paket_raw r USING (id) WHERE id = 1005"
     ).fetchone() == (123, "123", first_seen)
     assert runs(db)[-1]["rows_updated"] == 1
 
@@ -269,3 +271,34 @@ def test_page_limit_does_not_sleep_after_last_page(db, db_url):
     )
     assert sleeps == [1]
     assert "partial" in runs(db)[0]["note"]
+
+
+def test_real_rows_without_jenis_pengadaan_are_stored(db, db_url):  # AC-01 regression
+    no_name = dict(REAL_ROW_WITHOUT_JENIS)  # real SIRUP row: idJenisPengadaan 6, no name
+    no_type = {k: v for k, v in REAL_ROW_WITHOUT_JENIS.items() if k != "idJenisPengadaan"}
+    no_type["id"] = no_name["id"] + 1
+    run_scrape(settings(db_url), FakeSource([*rows(3), no_name, no_type]))
+    [run] = runs(db)
+    assert run["rows_invalid"] == 0 and run["rows_inserted"] == 5
+    stored = db.execute(
+        "SELECT id, id_jenis_pengadaan, jenis_pengadaan, satuan_kerja FROM paket "
+        "WHERE id >= 61900988 ORDER BY id"
+    ).fetchall()
+    assert stored == [
+        (61900988, 6, None, "KANTOR BAHASA KEPULAUAN RIAU"),
+        (61900989, None, None, "KANTOR BAHASA KEPULAUAN RIAU"),
+    ]
+    raw = db.execute("SELECT raw FROM paket_raw WHERE id = 61900988").fetchone()[0]
+    assert raw == REAL_ROW_WITHOUT_JENIS
+
+
+def test_invalid_rows_are_logged_with_reason_and_ids(db, db_url, caplog):
+    data = rows(10)
+    data[2]["pagu"] = "rusak"
+    del data[4]["id"]
+    with caplog.at_level("WARNING", logger="sirup.scraper.runner"):
+        run_scrape(settings(db_url), FakeSource(data))
+    [msg] = [r.getMessage() for r in caplog.records if "invalid" in r.getMessage()]
+    assert "2 of 10 rows invalid" in msg
+    assert "pagu:value_error=1" in msg and "id:missing=1" in msg
+    assert "sample_ids [1002, None]" in msg

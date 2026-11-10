@@ -27,6 +27,32 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
+    # Sized for the target server in the BRD: 2 CPU / 4 GB RAM VPS (ADR TD-06).
+    # Override with the PG_* variables in .env on a bigger machine.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-1GB}
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-3GB}
+      - -c
+      - work_mem=${PG_WORK_MEM:-32MB}
+      - -c
+      - maintenance_work_mem=${PG_MAINTENANCE_WORK_MEM:-256MB}
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=200
+      - -c
+      - max_parallel_workers_per_gather=${PG_MAX_PARALLEL_WORKERS_PER_GATHER:-2}
+      - -c
+      - max_parallel_workers=${PG_MAX_PARALLEL_WORKERS:-2}
+      - -c
+      - max_wal_size=2GB
+      - -c
+      - jit=off
+    # Parallel queries use /dev/shm; Docker's 64 MB default is too small.
+    shm_size: 256mb
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 10s

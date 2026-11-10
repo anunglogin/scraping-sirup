@@ -224,15 +224,23 @@ def search_paket(
         pagu_max=pagu_max,
     )
     with conn.cursor(row_factory=dict_row) as cur:
-        q, params = count_query(f)
+        q, params = count_query(f, MAX_RESULT_WINDOW + 1)
         cur.execute(q, params)
-        total = cur.fetchone()["count"]  # type: ignore[index]
+        counted = cur.fetchone()["count"]  # type: ignore[index]
+        capped = counted > MAX_RESULT_WINDOW
+        total = MAX_RESULT_WINDOW if capped else counted
         rows: list[dict[str, Any]] = []
         if total and (page - 1) * size < total:
             q, params = list_query(f, sort, size, (page - 1) * size)
             cur.execute(q, params)
             rows = cur.fetchall()
-    return PaketPage(total=total, page=page, size=size, data=[Paket(**r) for r in rows])
+    return PaketPage(
+        total=total,
+        total_terbatas=capped,
+        page=page,
+        size=size,
+        data=[Paket(**r) for r in rows],
+    )
 
 
 @router.get(
