@@ -1,0 +1,111 @@
+name: sirup
+
+x-app: &app
+  image: sirup:${APP_VERSION:-0.1.0}
+  build:
+    context: .
+  environment: &app-env
+    TZ: Asia/Jakarta
+  logging: &logging
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      API_DB_USER: ${API_DB_USER:?set API_DB_USER in .env}
+      API_DB_PASSWORD: ${API_DB_PASSWORD:?set API_DB_PASSWORD in .env}
+      TZ: Asia/Jakarta
+      PGTZ: Asia/Jakarta
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    logging: *logging
+    # No published port: only the containers on this network can reach it.
+
+  migrate:
+    <<: *app
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    environment:
+      <<: *app-env
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  scraper:
+    <<: *app
+    command: ["python", "-m", "sirup.scraper", "schedule"]
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      TAHUN_ANGGARAN: ${TAHUN_ANGGARAN:-}
+      SCRAPE_PAGE_SIZE: ${SCRAPE_PAGE_SIZE:-5000}
+      SCRAPE_DELAY_SECONDS: ${SCRAPE_DELAY_SECONDS:-2}
+      SCRAPE_TIME: ${SCRAPE_TIME:-02:00}
+      SCRAPE_MAX_PAGES: ${SCRAPE_MAX_PAGES:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  api:
+    <<: *app
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      # Read-only role created by db/init/10-api-role.sh
+      DATABASE_URL: postgresql://${API_DB_USER}:${API_DB_PASSWORD}@db:5432/${POSTGRES_DB}
+      API_KEYS: ${API_KEYS:?set API_KEYS in .env}
+    ports:
+      - "${API_BIND:-127.0.0.1}:${API_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  backup:
+    image: postgres:16
+    restart: unless-stopped
+    entrypoint: ["sh", "/ops/backup.sh"]
+    environment:
+      PGHOST: db
+      PGDATABASE: ${POSTGRES_DB}
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_HOUR: ${BACKUP_HOUR:-4}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-7}
+      TZ: Asia/Jakarta
+    volumes:
+      - ./ops/backup.sh:/ops/backup.sh:ro
+      - ./backups:/backups
+    logging: *logging
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:
