@@ -106,6 +106,33 @@ def make_row(
     return row
 
 
+# Real SIRUP row (page start=10000, fetched 11 Nov 2026): no "jenisPengadaan"
+# key at all, idJenisPengadaan 6. About 200 such packages exist in 2026.
+REAL_ROW_WITHOUT_JENIS: dict[str, Any] = {
+    "idBulan": 1,
+    "pagu": 16500000,
+    "satuanKerja": "KANTOR BAHASA KEPULAUAN RIAU",
+    "isPDN": True,
+    "idlokasi": 0,
+    "idKldi": "K58",
+    "metode": "Pengadaan Langsung",
+    "sumberDana": "APBN, ",
+    "kldi": "Kementerian Pendidikan Dasar dan Menengah",
+    "isUMK": True,
+    "idsLokasi": "16012",
+    "id_referensi": 884,
+    "lokasi": "Kepulauan Riau, Bintan (Kab.)",
+    "idSatker": 386008,
+    "pemilihan": "January 2026",
+    "idMetode": 8,
+    "id": 61900988,
+    "idJenisPengadaan": 6,
+    "paket": "pengadaan seminar kit kegiatan Festival Tunas Bahasa Ibu Provinsi "
+    "Kepulauan Riau Tahun 2026",
+    "pds": False,
+}
+
+
 @pytest.fixture
 def sample_rows() -> list[dict[str, Any]]:
     return copy.deepcopy(SAMPLE_ROWS)

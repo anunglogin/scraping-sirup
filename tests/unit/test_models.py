@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from sirup.scraper.models import COPY_COLUMNS, parse_rows
-from tests.conftest import make_row
+from sirup.scraper.models import COPY_COLUMNS, parse_rows, validate_page
+from tests.conftest import REAL_ROW_WITHOUT_JENIS, make_row
 
 
 def test_sample_rows_from_sirup_parse(sample_rows):
@@ -59,3 +59,24 @@ def test_nul_characters_removed():
     assert invalid == 0
     assert valid[0].row.paket == "Laptop kantor"
     assert "\x00" not in valid[0].raw["paket"]
+
+
+def test_real_row_without_jenis_pengadaan_is_valid():
+    no_type = {k: v for k, v in REAL_ROW_WITHOUT_JENIS.items() if k != "idJenisPengadaan"}
+    valid, invalid = parse_rows([REAL_ROW_WITHOUT_JENIS, no_type])
+    assert invalid == 0
+    assert (valid[0].row.id_jenis_pengadaan, valid[0].row.jenis_pengadaan) == (6, None)
+    assert (valid[1].row.id_jenis_pengadaan, valid[1].row.jenis_pengadaan) == (None, None)
+
+
+def test_validate_page_summarises_reasons():
+    bad_pagu = make_row(1, pagu="abc")
+    no_id = make_row(2)
+    del no_id["id"]
+    result = validate_page([bad_pagu, no_id, make_row(3, pagu="x"), "junk", make_row(4)])
+    assert result.invalid == 4 and len(result.valid) == 1
+    assert result.reasons[("pagu", "value_error")] == 2
+    assert result.reasons[("id", "missing")] == 1
+    assert result.reasons[("<row>", "not_an_object")] == 1
+    assert result.sample_ids == [1001, None, 1003]  # at most 3
+    assert "pagu:value_error=2" in result.describe()

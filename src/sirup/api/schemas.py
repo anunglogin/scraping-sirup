@@ -45,11 +45,13 @@ class Paket(BaseModel):
     tahun_anggaran: int = Field(description="Tahun anggaran paket.")
     nama_paket: str = Field(description="Nama paket pekerjaan.")
     pagu: int = Field(description="Nilai pagu dalam rupiah (bilangan bulat).")
-    id_jenis_pengadaan: int = Field(
+    id_jenis_pengadaan: int | None = Field(
         description="Kode jenis pengadaan: 1 Barang, 2 Pekerjaan Konstruksi, "
         "3 Jasa Konsultansi, 4 Jasa Lainnya."
     )
-    jenis_pengadaan: str = Field(description="Nama jenis pengadaan.")
+    jenis_pengadaan: str | None = Field(
+        description="Nama jenis pengadaan. Kosong (null) bila SIRUP tidak mencantumkannya."
+    )
     id_metode: int | None = Field(description="Kode metode pemilihan.")
     metode: str | None = Field(description="Metode pemilihan, mis. 'Tender', 'E-Purchasing'.")
     id_bulan: int | None = Field(description="Bulan rencana pemilihan penyedia (1–12).")

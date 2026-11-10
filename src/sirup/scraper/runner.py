@@ -10,7 +10,7 @@ from typing import Protocol
 
 from sirup.scraper.client import Page, SirupClient
 from sirup.scraper.config import ScraperSettings
-from sirup.scraper.models import parse_rows
+from sirup.scraper.models import validate_page
 from sirup.scraper.store import Store
 
 log = logging.getLogger(__name__)
@@ -66,11 +66,21 @@ def run_scrape(
         try:
             while True:
                 page = source.fetch_page(year, start, size)
-                valid, invalid = parse_rows(page.data)
+                checked = validate_page(page.data)
+                valid, invalid = checked.valid, checked.invalid
+                if invalid:
+                    log.warning(
+                        "run %s: start=%s %s of %s rows invalid: %s",
+                        run.id,
+                        start,
+                        invalid,
+                        len(page.data),
+                        checked.describe(),
+                    )
                 if page.data and invalid > MAX_INVALID_SHARE * len(page.data):
                     raise TooManyInvalidRowsError(
                         f"{invalid} of {len(page.data)} rows invalid at start={start}; "
-                        "SIRUP format probably changed"
+                        f"SIRUP format probably changed; {checked.describe()}"
                     )
                 next_start = start + len(page.data)
                 result = store.save_page(

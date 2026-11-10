@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
@@ -33,8 +35,12 @@ class SirupRow(BaseModel):
     id: int = Field(gt=0, le=BIGINT_MAX)
     paket: str
     pagu: int = Field(ge=0, le=BIGINT_MAX)
-    id_jenis_pengadaan: int = Field(alias="idJenisPengadaan", ge=SMALLINT_MIN, le=SMALLINT_MAX)
-    jenis_pengadaan: str = Field(alias="jenisPengadaan")
+    # Optional: SIRUP really publishes some packages without a procurement type
+    # (~200 rows in 2026, e.g. Kantor Bahasa Kepulauan Riau). See ADR TD-06.
+    id_jenis_pengadaan: int | None = Field(
+        default=None, alias="idJenisPengadaan", ge=SMALLINT_MIN, le=SMALLINT_MAX
+    )
+    jenis_pengadaan: str | None = Field(default=None, alias="jenisPengadaan")
     id_metode: int | None = Field(default=None, alias="idMetode", ge=SMALLINT_MIN, le=SMALLINT_MAX)
     metode: str | None = None
     id_bulan: int | None = Field(default=None, alias="idBulan", ge=SMALLINT_MIN, le=SMALLINT_MAX)
@@ -139,19 +145,46 @@ class ValidRow(BaseModel):
         )
 
 
-def parse_rows(items: list[Any]) -> tuple[list[ValidRow], int]:
-    """Validate a page of rows. Returns (valid rows, number of invalid rows)."""
-    valid: list[ValidRow] = []
-    invalid = 0
+@dataclass
+class PageValidation:
+    valid: list[ValidRow] = field(default_factory=list)
+    invalid: int = 0
+    # (field, pydantic error type) -> occurrences, e.g. ("pagu", "int_parsing")
+    reasons: Counter[tuple[str, str]] = field(default_factory=Counter)
+    sample_ids: list[Any] = field(default_factory=list)
+
+    def describe(self, max_reasons: int = 5) -> str:
+        top = ", ".join(f"{f}:{t}={n}" for (f, t), n in self.reasons.most_common(max_reasons))
+        return f"reasons [{top}] sample_ids {self.sample_ids}"
+
+
+MAX_SAMPLE_IDS = 3
+
+
+def validate_page(items: list[Any]) -> PageValidation:
+    """Validate a page of rows, keeping a summary of why rows were rejected."""
+    result = PageValidation()
     for item in items:
         if not isinstance(item, dict):
-            invalid += 1
+            result.invalid += 1
+            result.reasons[("<row>", "not_an_object")] += 1
             continue
         clean = _strip_nul(item)
         try:
             row = SirupRow.model_validate(clean)
-        except ValidationError:
-            invalid += 1
+        except ValidationError as exc:
+            result.invalid += 1
+            for err in exc.errors(include_url=False, include_input=False):
+                loc = ".".join(str(p) for p in err["loc"]) or "<row>"
+                result.reasons[(loc, err["type"])] += 1
+            if len(result.sample_ids) < MAX_SAMPLE_IDS:
+                result.sample_ids.append(clean.get("id"))
             continue
-        valid.append(ValidRow(row=row, raw=clean))
-    return valid, invalid
+        result.valid.append(ValidRow(row=row, raw=clean))
+    return result
+
+
+def parse_rows(items: list[Any]) -> tuple[list[ValidRow], int]:
+    """Validate a page of rows. Returns (valid rows, number of invalid rows)."""
+    result = validate_page(items)
+    return result.valid, result.invalid
