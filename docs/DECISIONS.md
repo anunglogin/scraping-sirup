@@ -79,3 +79,48 @@
       Nilai yang tidak muat di tipe kolom database dianggap baris rusak, bukan membuat run
       gagal.
 - **Dampak:** tidak ada perubahan pada kriteria diterima (AC-01..AC-11) maupun biaya.
+
+## TD-06 — Paket tanpa jenis pengadaan diterima + API dipercepat
+- **Tanggal:** 11 Nov 2026 · **Status:** Berlaku
+- **Masalah 1:** Pengambilan penuh kedua menyimpan 3.638.692 dari 3.638.893 paket; 201 paket
+  ditolak. Penyebabnya, SIRUP memang menerbitkan paket **tanpa nama jenis pengadaan**
+  (`jenisPengadaan` tidak ada; yang terlihat `idJenisPengadaan` = 6), misalnya milik Kantor
+  Bahasa Kepulauan Riau. Paket ini asli, jadi seharusnya ikut disimpan.
+- **Keputusan 1:**
+  - Kolom `id_jenis_pengadaan` dan `jenis_pengadaan` boleh kosong (migrasi 0002). Migrasi
+    ini hanya bisa dibatalkan kalau tidak ada lagi baris yang kosong; sistem tidak akan
+    menghapus data diam-diam.
+  - Setiap halaman yang berisi baris rusak sekarang menulis peringatan di log: jumlahnya,
+    kolom dan jenis kesalahannya, serta sampai 3 contoh ID. Sebelumnya baris rusak tidak
+    meninggalkan jejak.
+- **Masalah 2:** API lambat (1,2–9 detik), padahal targetnya < 1 detik (AC-07). Yang lambat
+  ternyata **menghitung jumlah hasil secara persis** (`count(*)`). Untuk filter yang luas,
+  database harus membaca seluruh tabel 3,3 GB. Mengambil 20 data teratasnya sendiri hanya
+  butuh < 1 milidetik.
+- **Keputusan 2:**
+  1. **Jumlah hasil dihitung sampai 10.000 saja.** Halaman yang bisa dibuka memang dibatasi
+     10.000 hasil (TD-05), jadi menghitung lebih dari itu tidak ada gunanya. Jawaban API
+     mendapat kolom baru `total_terbatas`: `true` artinya hasilnya **lebih dari 10.000**
+     (dan `total` berhenti di 10.000). Kolom lain tidak berubah, jadi pemakai lama tetap jalan.
+  2. **Data asli SIRUP (`raw`) dipindah ke tabel sendiri `paket_raw`** (migrasi 0003).
+     Kolom ini memakan ±600 dari ±900 byte per baris. Tabel `paket` menyusut dari 3,3 GB
+     menjadi 1,1 GB, sehingga lebih banyak yang muat di memori server 4 GB. Saat dibangun
+     ulang, baris disusun urut pagu, dan indeks pagu/terbaru diberi `id` sebagai penentu
+     urutan yang sama dengan API.
+  3. **Pengaturan PostgreSQL untuk VPS 2 CPU / 4 GB** (sesuai BRD) lewat `command:` di
+     docker-compose: `shared_buffers=1GB`, `effective_cache_size=3GB`, `work_mem=32MB`,
+     `maintenance_work_mem=256MB`, `random_page_cost=1.1`, `effective_io_concurrency=200`,
+     paralel maksimal 2, `max_wal_size=2GB`, `jit=off`, `shm_size: 256mb`. Bisa ditimpa
+     lewat variabel `PG_*` di `.env`.
+  4. **Tidak memakai** indeks parsial `WHERE is_active`: saat ini semua paket aktif, jadi
+     tidak ada untungnya. Dipertimbangkan lagi kalau paket nonaktif sudah banyak.
+- **Hasil ukur** (database penuh 3,6 juta paket, 12 pencarian × 3 kali, dari curl):
+  p95 sebelum **5,0 detik**; sesudah **0,50 detik**; sesaat setelah database dinyalakan
+  ulang (memori masih kosong) **1,1 detik**, lalu turun lagi setelah beberapa pencarian.
+  Tabel lengkap ada di `docs/ARCHITECTURE.md` §6.
+- **Harga yang dibayar:**
+  - Migrasi 0003 membangun ulang tabel. Di laptop pengembang butuh ±5 menit, dan selama itu
+    API tertahan (bisa menjawab 503). Jalankan di luar jam kerja.
+  - `total` bukan angka persis kalau hasilnya lebih dari 10.000.
+  - Detail paket (`/v1/paket/{id}`) mengambil `raw` dari `paket_raw`.
+- **Biaya:** Rp0.

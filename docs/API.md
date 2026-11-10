@@ -55,10 +55,17 @@ Semua filter boleh digabung; hasilnya harus cocok dengan **semua** filter yang d
 Hanya 10.000 hasil pertama yang bisa dibuka (`page × size` ≤ 10.000). Kalau lebih,
 persempit filternya.
 
+**Tentang `total`:** supaya pencarian tetap di bawah 1 detik, jumlah hasil dihitung
+**sampai 10.000 saja**.
+- `total_terbatas: false`: `total` adalah jumlah yang persis.
+- `total_terbatas: true`: hasilnya **lebih dari 10.000**; `total` ditulis 10.000.
+  Persempit filter kalau perlu angka yang persis.
+
 Contoh jawaban:
 ```json
 {
   "total": 3,
+  "total_terbatas": false,
   "page": 1,
   "size": 2,
   "data": [

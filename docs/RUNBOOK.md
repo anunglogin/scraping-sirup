@@ -131,7 +131,33 @@ Bawaannya API hanya bisa dibuka dari server itu sendiri (`API_BIND=127.0.0.1`).
 - Untuk akses dari internet: **wajib** lewat HTTPS, misalnya reverse proxy Caddy (gratis).
   Jangan membuka port database (memang tidak dibuka oleh sistem ini).
 
-## 8. Masalah yang sering terjadi
+## 8. Pengaturan PostgreSQL dan perawatan
+
+Database diatur untuk **VPS 2 CPU / 4 GB RAM** (lihat `command:` di `docker-compose.yml`):
+
+| Pengaturan | Nilai | Variabel `.env` untuk mengubah |
+|---|---|---|
+| `shared_buffers` | 1GB | `PG_SHARED_BUFFERS` |
+| `effective_cache_size` | 3GB | `PG_EFFECTIVE_CACHE_SIZE` |
+| `work_mem` | 32MB | `PG_WORK_MEM` |
+| `maintenance_work_mem` | 256MB | `PG_MAINTENANCE_WORK_MEM` |
+| `max_parallel_workers_per_gather` / `max_parallel_workers` | 2 / 2 | `PG_MAX_PARALLEL_WORKERS_PER_GATHER` / `PG_MAX_PARALLEL_WORKERS` |
+| `random_page_cost`, `effective_io_concurrency` | 1.1, 200 (disk SSD) | — |
+| `max_wal_size`, `jit` | 2GB, off | — |
+| `shm_size` (container) | 256mb | — |
+
+Untuk server 8 GB: kira-kira `PG_SHARED_BUFFERS=2GB`, `PG_EFFECTIVE_CACHE_SIZE=6GB`.
+Setelah mengubah: `docker compose up -d db`.
+
+**Setelah migrasi besar** (mis. 0003, yang membangun ulang tabel `paket` dalam ±5 menit;
+selama itu API tertahan, jadi jalankan di luar jam kerja), segarkan statistik database:
+```
+docker compose exec db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "VACUUM (ANALYZE) paket" -c "VACUUM (ANALYZE) paket_raw"'
+```
+Setelah database dinyalakan ulang, beberapa pencarian pertama bisa sedikit lebih lambat
+(±1 detik) karena memorinya masih kosong. Ini normal.
+
+## 9. Masalah yang sering terjadi
 
 | Gejala | Penyebab umum | Tindakan |
 |---|---|---|
@@ -139,5 +165,6 @@ Bawaannya API hanya bisa dibuka dari server itu sendiri (`API_BIND=127.0.0.1`).
 | API menjawab 401 | Kunci salah atau belum ada di `API_KEYS` | Periksa `.env`, lalu `docker compose up -d api` |
 | `api` gagal menyala, log menyebut *API_KEYS* | Ada kunci < 24 karakter | Buat kunci baru (bagian 1) |
 | Run `failed` dengan pesan *format* | SIRUP mengubah format datanya | Hubungi tim pengembang (perbaikan ±1 hari) |
+| Log scraper berisi *rows invalid: reasons [...]* | Ada baris SIRUP yang bentuknya tidak biasa | Kirim baris log itu (berisi kolom, jenis kesalahan, contoh ID) ke tim pengembang |
 | Run `failed` dengan *HTTP 403* | SIRUP menolak akses | Jangan dipaksa; tunggu dan hubungi tim pengembang |
 | Ganti `API_DB_PASSWORD` tidak berpengaruh | Role database dibuat hanya saat pertama kali | Jalankan `ALTER ROLE sirup_api PASSWORD '...'` lewat `psql` sebagai admin |

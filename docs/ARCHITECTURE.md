@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | **BERLAKU — BRD disetujui 10 Nov 2026** · diperbarui 10 Nov 2026 sesuai TD-05 (hasil implementasi) |
+| Status | **BERLAKU — BRD disetujui 10 Nov 2026** · diperbarui sesuai TD-05 (10 Nov 2026) dan TD-06 (11 Nov 2026) |
 | Tanggal | 10 November 2026 |
 | Acuan | `docs/BRD.md`, `docs/DECISIONS.md` |
 
@@ -122,8 +122,8 @@ CREATE TABLE paket (
   tahun_anggaran     SMALLINT     NOT NULL,
   nama_paket         TEXT         NOT NULL,       -- "paket"
   pagu               BIGINT       NOT NULL,       -- rupiah
-  id_jenis_pengadaan SMALLINT     NOT NULL,
-  jenis_pengadaan    TEXT         NOT NULL,
+  id_jenis_pengadaan SMALLINT,                    -- boleh kosong: ada paket SIRUP tanpa jenis (TD-06)
+  jenis_pengadaan    TEXT,
   id_metode          SMALLINT,
   metode             TEXT,
   id_bulan           SMALLINT,                    -- bulan pemilihan 1-12
@@ -139,7 +139,6 @@ CREATE TABLE paket (
   is_umk             BOOLEAN,
   pds                BOOLEAN,
   id_referensi       INTEGER,
-  raw                JSONB        NOT NULL,       -- baris asli, untuk jaga-jaga
   is_active          BOOLEAN      NOT NULL DEFAULT true,
   first_seen_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
   last_seen_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
@@ -149,8 +148,14 @@ CREATE TABLE paket (
 CREATE INDEX ix_paket_nama_trgm   ON paket USING gin (nama_paket gin_trgm_ops);
 CREATE INDEX ix_paket_satker_trgm ON paket USING gin (satuan_kerja gin_trgm_ops);
 CREATE INDEX ix_paket_bulan       ON paket (tahun_anggaran, id_bulan);
-CREATE INDEX ix_paket_pagu        ON paket (tahun_anggaran, pagu);
-CREATE INDEX ix_paket_first_seen ON paket (first_seen_at DESC);   -- "paket baru"
+CREATE INDEX ix_paket_pagu        ON paket (tahun_anggaran, pagu, id);
+CREATE INDEX ix_paket_first_seen ON paket (first_seen_at DESC, id DESC);   -- "paket baru"
+
+-- Baris asli SIRUP, dipisah dari tabel utama supaya tabel paket kecil (TD-06)
+CREATE TABLE paket_raw (
+  id  BIGINT PRIMARY KEY,                 -- = paket.id
+  raw JSONB  NOT NULL
+);
 
 CREATE TABLE scrape_runs (
   id               BIGSERIAL PRIMARY KEY,
@@ -171,9 +176,13 @@ CREATE TABLE scrape_runs (
 CREATE INDEX ix_scrape_runs_year ON scrape_runs (tahun_anggaran, id DESC);
 ```
 
-Migrasi: `db/migrations/versions/0001_initial_schema.py` (SQL mentah, punya `downgrade`).
+Migrasi (SQL mentah, semuanya punya `downgrade`): `0001_initial_schema`,
+`0002_jenis_pengadaan_nullable`, `0003_split_raw_and_rebuild_paket`. Migrasi 0003
+membangun ulang tabel `paket` (±5 menit untuk 3,6 juta baris; API tertahan selama itu).
+Setelahnya jalankan `VACUUM (ANALYZE)` (lihat RUNBOOK).
 
-Perkiraan ukuran: ±3,6 juta baris, sekitar **3–5 GB** termasuk indeks dan kolom `raw`.
+Ukuran terukur (11 Nov 2026, 3,6 juta baris): `paket` 1,9 GB (data 1,1 GB + indeks
+0,8 GB), `paket_raw` 2,4 GB. Total ±4,3 GB.
 
 ## 6. Kontrak API (v1)
 
@@ -208,12 +217,38 @@ per filter.
 
 Contoh balasan:
 ```json
-{ "total": 1234, "page": 1, "size": 50,
+{ "total": 1234, "total_terbatas": false, "page": 1, "size": 50,
   "data": [ { "id": 63838517, "nama_paket": "...", "pagu": 30000000, "kldi": "...", "...": "..." } ] }
 ```
 
+`total` dihitung **sampai 10.000 saja**. Kalau yang cocok lebih banyak, `total` = 10.000 dan
+`total_terbatas` = `true` (artinya "lebih dari 10.000"). Menghitung persis jutaan baris butuh
+3–8 detik, dan halaman di atas 10.000 memang tidak bisa dibuka (TD-06).
+
+**Kecepatan** (12 pencarian × 3 kali, curl ke API, database penuh; detik):
+
+| Pencarian | Sebelum | Sesudah (normal) | Sesudah DB baru dinyalakan |
+|---|---|---|---|
+| `size=20` | 1,59–1,91 | 0,015–0,017 | 0,07–0,32 |
+| `sort=terbaru` | 1,19–1,81 | 0,015–0,035 | 0,05–0,07 |
+| `paket=laptop` | 0,15–0,18 | 0,08–0,14 | 0,15–0,63 |
+| `paket=belanja` | 3,67–4,61 | 0,04–0,06 | 0,07–0,10 |
+| `paket=komputer&pagu_min=100000000` | 1,41–1,75 | 0,19–0,24 | 0,37–0,73 |
+| `satuan_kerja=puskesmas` | 0,98–1,56 | 0,26–0,29 | 0,52–**1,60** |
+| `satuan_kerja=dinas` | 4,26–5,09 | 0,05–0,06 | 0,06–0,12 |
+| `pemilihan_bulan=1` | 1,15–2,10 | 0,02–0,04 | 0,04–0,09 |
+| `pagu_min=1000000000` | 0,34–0,53 | 0,02 | 0,02–0,04 |
+| `pagu_min=100000000&pagu_max=500000000` | 0,85–1,01 | 0,02 | 0,04–0,11 |
+| `paket=makan&satuan_kerja=dinas&pemilihan_bulan=3&pagu_min=50000000` | 2,12–3,16 | 0,50–0,61 | 0,53–**1,11** |
+| `paket=belanja&page=500&size=20` (halaman terdalam) | 3,05–4,53 | 0,11–0,12 | 0,15–0,20 |
+| **p95 (36 permintaan)** | **5,00** | **0,50** | **1,11** |
+
+"Sesudah DB baru dinyalakan" = memori database masih kosong. Pencarian pertama yang memakai
+indeks trigram bisa lewat sedikit dari 1 detik, lalu cepat lagi. Diukur di mesin pengembang
+dengan pengaturan PostgreSQL untuk VPS 4 GB; angka di VPS asli perlu dicek ulang (T8).
+
 ### Endpoint lain
-- `GET /v1/paket/{id}`: satu paket; 404 kalau tidak ada.
+- `GET /v1/paket/{id}`: satu paket beserta `raw` (dari `paket_raw`); 404 kalau tidak ada.
 - `GET /v1/scrape-runs?limit=20`: riwayat pengambilan data (AC-11).
 - `GET /health`: cek koneksi database, tanpa kunci.
 
@@ -270,6 +305,9 @@ sirup/
 - `docker compose up -d`. Image diberi tag versi (`sirup:0.1.0`, dari `APP_VERSION`), jangan `latest`.
 - **Rollback:** ganti tag image ke versi sebelumnya, lalu jalankan `docker compose up -d`.
   Migrasi skema selalu punya `downgrade`.
+- **PostgreSQL** diatur untuk VPS 2 CPU / 4 GB lewat `command:` di docker-compose
+  (`shared_buffers=1GB`, `effective_cache_size=3GB`, `work_mem=32MB`, dll.; TD-06).
+  Nilainya bisa ditimpa lewat variabel `PG_*` di `.env`.
 - **Backup:** container `backup` mengecek setiap 10 menit; setelah pukul 04:00 WIB dibuat
   `pg_dump` hari itu (sekali sehari) ke folder `./backups`, disimpan 7 hari. Pemulihannya diuji
   sebelum go-live (AC-10).
