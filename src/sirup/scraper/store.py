@@ -101,8 +101,15 @@ class Store:
         return cls(conn)
 
     def close(self) -> None:
-        # Closing the session releases the advisory lock.
-        self.conn.close()
+        # Release the lock explicitly: the server frees a closed session's locks
+        # asynchronously, so a run started right after could otherwise be refused.
+        try:
+            if not self.conn.closed:
+                self.conn.execute("SELECT pg_advisory_unlock(%s)", (ADVISORY_LOCK_KEY,))
+        except psycopg.Error:
+            pass  # the lock is released with the session anyway
+        finally:
+            self.conn.close()
 
     def __enter__(self) -> Self:
         return self
