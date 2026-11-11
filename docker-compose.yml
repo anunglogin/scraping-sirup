@@ -174,6 +174,26 @@ services:
       api:
         condition: service_healthy
 
+  inaproc:
+    # Optional, manual collector for data.inaproc.id (see README):
+    #   docker compose --profile inaproc run --rm inaproc
+    # Writes to ./output/inaproc. Stops with exit code 2 when the site refuses.
+    <<: *app
+    profiles: ["inaproc"]
+    restart: "no"
+    command: ["python", "-m", "sirup.inaproc"]
+    environment:
+      <<: *app-env
+      INAPROC_OUTPUT_DIR: /app/output/inaproc
+      INAPROC_TAHUN: ${INAPROC_TAHUN:-}
+      INAPROC_LIMIT: ${INAPROC_LIMIT:-100}
+      INAPROC_MAX_PAGES: ${INAPROC_MAX_PAGES:-10}
+      INAPROC_DELAY_SECONDS: ${INAPROC_DELAY_SECONDS:-2}
+      INAPROC_X_SECRET: ${INAPROC_X_SECRET:-}
+      INAPROC_REQUEST_TIME: ${INAPROC_REQUEST_TIME:-}
+    volumes:
+      - ./output/inaproc:/app/output/inaproc
+
 networks:
   default:
   # Small private network between Caddy and the API; the fixed address lets

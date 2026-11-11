@@ -17,3 +17,6 @@ dist/
 .ruff_cache/
 .coverage
 htmlcov/
+
+# Output of the optional inaproc collector
+output/

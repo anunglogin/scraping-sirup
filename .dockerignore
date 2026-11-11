@@ -14,3 +14,4 @@ docs
 *.egg-info
 build
 dist
+output
