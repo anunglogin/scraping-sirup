@@ -390,3 +390,40 @@ def test_failed_run_from_previous_wib_day_is_not_resumed(db, db_url):  # F-12
     run_scrape(settings(db_url), source)
     assert source.starts == [0, 10, 20]
     assert [r["status"] for r in runs(db)] == ["failed", "success"]
+
+
+# ------------------------------------------------------------ sumber (TD-10)
+def sumber(db, pid: int) -> list[str]:
+    return db.execute("SELECT sumber FROM paket WHERE id = %s", (pid,)).fetchone()[0]
+
+
+def add_inaproc_only(db, pid: int, nama: str = "Dari INAPROC") -> None:
+    db.execute(
+        "INSERT INTO paket (id, tahun_anggaran, nama_paket, pagu, sumber) "
+        "VALUES (%s, %s, %s, 1, '{inaproc}')",
+        (pid, YEAR, nama),
+    )
+
+
+def test_new_sirup_rows_are_tagged_sirup(db, db_url):
+    run_scrape(settings(db_url), FakeSource(rows(3)))
+    assert sumber(db, 1000) == ["sirup"]
+
+
+def test_inaproc_only_package_is_never_deactivated_by_sirup(db, db_url):
+    add_inaproc_only(db, 99_001)
+    for _ in range(3):
+        run_scrape(settings(db_url), FakeSource(rows(25)))
+    assert state(db, 99_001) == (True, 0)
+    assert sumber(db, 99_001) == ["inaproc"]
+    assert runs(db)[-1]["rows_missing"] == 0
+
+
+def test_sirup_takes_over_content_and_keeps_inaproc_tag(db, db_url):
+    add_inaproc_only(db, 1003, nama="Nama versi INAPROC")
+    run_scrape(settings(db_url), FakeSource(rows(5)))
+    nama = db.execute("SELECT nama_paket FROM paket WHERE id = 1003").fetchone()[0]
+    assert nama == "Pengadaan barang nomor 3"
+    assert sumber(db, 1003) == ["inaproc", "sirup"]
+    run_scrape(settings(db_url), FakeSource(rows(5)))  # tag is not added twice
+    assert sumber(db, 1003) == ["inaproc", "sirup"]

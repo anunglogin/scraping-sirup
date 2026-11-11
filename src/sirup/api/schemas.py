@@ -31,6 +31,7 @@ _PAKET_EXAMPLE: dict[str, Any] = {
     "pds": False,
     "id_referensi": 334,
     "is_active": True,
+    "sumber": ["sirup", "inaproc"],
     "first_seen_at": "2026-11-10T02:00:05+07:00",
     "last_seen_at": "2026-11-11T02:03:41+07:00",
     "updated_at": "2026-11-10T02:00:05+07:00",
@@ -38,7 +39,7 @@ _PAKET_EXAMPLE: dict[str, Any] = {
 
 
 class Paket(BaseModel):
-    """Satu paket pengadaan dari SIRUP."""
+    """Satu paket pengadaan dari SIRUP dan/atau INAPROC."""
 
     model_config = ConfigDict(json_schema_extra={"example": _PAKET_EXAMPLE})
 
@@ -75,6 +76,10 @@ class Paket(BaseModel):
     is_active: bool = Field(
         description="False bila paket sudah tidak muncul lagi di SIRUP (mis. dibatalkan)."
     )
+    sumber: list[str] = Field(
+        description="Sumber yang mencantumkan paket ini: `sirup`, `inaproc`, atau keduanya. "
+        "Bila ada `sirup`, isi paket mengikuti SIRUP."
+    )
     first_seen_at: datetime = Field(description="Kapan paket ini pertama kali kami ambil.")
     last_seen_at: datetime = Field(description="Kapan paket ini terakhir terlihat di SIRUP.")
     updated_at: datetime = Field(description="Kapan isi paket terakhir berubah.")
@@ -87,7 +92,10 @@ class PaketDetail(Paket):
         json_schema_extra={"example": {**_PAKET_EXAMPLE, "raw": {"id": 60522827, "...": "..."}}}
     )
 
-    raw: dict[str, Any] = Field(description="Baris asli persis seperti dikirim SIRUP.")
+    raw: dict[str, Any] = Field(
+        description="Baris asli persis seperti dikirim SIRUP; untuk paket yang hanya ada "
+        "di INAPROC, baris asli dari INAPROC."
+    )
 
 
 class PaketPage(BaseModel):

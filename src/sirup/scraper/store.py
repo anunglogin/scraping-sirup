@@ -31,6 +31,8 @@ MAX_TOTAL_DROP = 0.20
 # next night, so one miss is not enough evidence.
 MISSING_RUNS_TO_DEACTIVATE = 2
 
+# Only packages SIRUP lists (sumber contains 'sirup') can be deactivated by a SIRUP
+# run; packages known only from INAPROC are never seen here (ADR TD-10).
 # ``raw`` lives in its own table (paket_raw, migration 0003); the rest in paket.
 _PAKET_COLUMNS = [c for c in COPY_COLUMNS if c != "raw"]
 _UPDATE_COLUMNS = [c for c in _PAKET_COLUMNS if c != "id"]
@@ -230,6 +232,8 @@ class Store:
                     INSERT INTO paket ({cols})
                     SELECT {cols} FROM src
                     ON CONFLICT (id) DO UPDATE SET {updates},
+                        sumber = CASE WHEN 'sirup' = ANY(paket.sumber) THEN paket.sumber
+                                      ELSE array_append(paket.sumber, 'sirup') END,
                         is_active = true,
                         missing_runs = 0,
                         last_seen_at = now(),
@@ -298,13 +302,15 @@ class Store:
             if note is None:
                 cur.execute(
                     "UPDATE paket SET missing_runs = missing_runs + 1 "
-                    "WHERE tahun_anggaran = %s AND is_active AND last_seen_at < %s",
+                    "WHERE tahun_anggaran = %s AND is_active AND last_seen_at < %s "
+                    "AND 'sirup' = ANY(sumber)",
                     (run.tahun_anggaran, run.started_at),
                 )
                 missing = cur.rowcount
                 cur.execute(
                     "UPDATE paket SET is_active = false WHERE tahun_anggaran = %s "
-                    "AND is_active AND last_seen_at < %s AND missing_runs >= %s",
+                    "AND is_active AND last_seen_at < %s AND missing_runs >= %s "
+                    "AND 'sirup' = ANY(sumber)",
                     (run.tahun_anggaran, run.started_at, MISSING_RUNS_TO_DEACTIVATE),
                 )
                 deactivated = cur.rowcount

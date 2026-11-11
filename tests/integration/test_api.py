@@ -197,7 +197,10 @@ def test_default_page_size_and_fields(client, seeded):
     body = search(client).json()
     assert body["size"] == 20 and body["page"] == 1 and body["total"] == 7
     assert "raw" not in body["data"][0]
-    assert {"nama_paket", "pagu", "satuan_kerja", "id_bulan", "is_active"} <= set(body["data"][0])
+    assert {"nama_paket", "pagu", "satuan_kerja", "id_bulan", "is_active", "sumber"} <= set(
+        body["data"][0]
+    )
+    assert body["data"][0]["sumber"] == ["sirup"]
 
 
 @pytest.mark.parametrize(
@@ -236,6 +239,7 @@ def test_default_page_size_and_fields(client, seeded):
         {"page": 501, "size": 20},
         {"sort": "id; DROP TABLE paket"},
         {"tahun": 1999},
+        {"sumber": "lkpp"},
     ],
 )
 def test_validation_errors(client, seeded, params):
@@ -290,7 +294,7 @@ def test_openapi_documents_security_and_parameters(client):
     params = {p["name"]: p for p in op["parameters"]}
     expected = {
         "paket", "satuan_kerja", "pemilihan", "pagu_min", "pagu_max",
-        "tahun", "aktif", "sort", "page", "size",
+        "sumber", "tahun", "aktif", "sort", "page", "size",
     }  # fmt: skip
     assert set(params) == expected
     for name, p in params.items():
@@ -428,3 +432,22 @@ def test_statement_timeout_default_is_3s():
     s = ApiSettings(database_url="postgresql://x@y/z", api_keys="k" * 24)
     assert s.db_statement_timeout_ms == 3000
     assert s.search_slots() == 8
+
+
+def test_filter_sumber_and_inaproc_only_detail(client, seeded, db):
+    db.execute("UPDATE paket SET sumber = '{sirup,inaproc}' WHERE id = 3")
+    db.execute(
+        "INSERT INTO paket (id, tahun_anggaran, nama_paket, pagu, sumber) "
+        "VALUES (10, 2026, 'Paket hanya INAPROC', 400000000, '{inaproc}')"
+    )
+    db.execute(
+        "INSERT INTO inaproc_rup (kode_rup, tahun_anggaran, raw) VALUES (10, 2026, %s)",
+        (json.dumps({"kode_rup": "10"}),),
+    )
+    assert ids(search(client, sumber="inaproc")) == [3, 10]
+    assert 10 not in ids(search(client, sumber="sirup"))
+    assert 3 in ids(search(client, sumber="sirup"))
+    assert 10 in ids(search(client))
+    detail = client.get("/v1/paket/10", headers=H).json()
+    assert detail["sumber"] == ["inaproc"]
+    assert detail["raw"] == {"kode_rup": "10"}

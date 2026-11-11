@@ -29,6 +29,7 @@ from sirup.api.queries import (
     RUNS_QUERY,
     PaketFilter,
     SortKey,
+    Sumber,
     count_query,
     list_query,
 )
@@ -56,6 +57,7 @@ dari [SIRUP](https://sirup.inaproc.id).
 | `satuan_kerja` | Nama satuan kerja mengandung kata ini |
 | `pemilihan` | Bulan + tahun pemilihan, format `YYYY-MM` (mis. `2026-03`), boleh diulang |
 | `pagu_min` / `pagu_max` | Rentang nilai pagu dalam rupiah |
+| `sumber` | Hanya paket dari sumber ini: `sirup` atau `inaproc` |
 
 Semua kata kunci **tidak peka huruf besar/kecil** dan harus memuat minimal **3 huruf/angka
 berurutan** (mis. `laptop`, `100%`). Tanda `%` dan `_` dicari apa adanya.
@@ -69,7 +71,7 @@ berurutan** (mis. `laptop`, `100%`). Tanda `%` dan `_` dicari apa adanya.
 """
 
 TAGS = [
-    {"name": "Paket", "description": "Cari dan lihat paket pengadaan dari SIRUP."},
+    {"name": "Paket", "description": "Cari dan lihat paket pengadaan dari SIRUP dan INAPROC."},
     {"name": "Riwayat pengambilan", "description": "Catatan setiap kali data diambil dari SIRUP."},
     {"name": "Sistem", "description": "Cek kesehatan layanan (tanpa kunci API)."},
 ]
@@ -251,6 +253,16 @@ def search_paket(
             examples=[1_000_000_000],
         ),
     ] = None,
+    sumber: Annotated[
+        Sumber | None,
+        Query(
+            description="Hanya paket yang dicantumkan sumber ini: `sirup` atau `inaproc`. "
+            "Kosongkan untuk semua sumber. Paket yang ada di keduanya ikut di dua-duanya. "
+            "Catatan: paket yang hanya ada di INAPROC tidak punya bulan pemilihan, "
+            "jadi tidak ikut bila filter `pemilihan` dipakai.",
+            examples=["inaproc"],
+        ),
+    ] = None,
     tahun: Annotated[
         int | None,
         Query(
@@ -305,6 +317,7 @@ def search_paket(
         pemilihan=tuple(sorted({(int(v[:4]), int(v[5:])) for v in pemilihan or []})),
         pagu_min=pagu_min,
         pagu_max=pagu_max,
+        sumber=sumber,
     )
     with conn.cursor(row_factory=dict_row) as cur:
         q, params = count_query(f, MAX_RESULT_WINDOW + 1)

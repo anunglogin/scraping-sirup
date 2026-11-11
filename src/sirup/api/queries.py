@@ -8,6 +8,7 @@ from typing import Any, Literal
 from psycopg import sql
 
 SortKey = Literal["pagu_desc", "pagu_asc", "terbaru"]
+Sumber = Literal["sirup", "inaproc"]
 
 # Whitelisted ORDER BY clauses; ties broken by id so paging is stable.
 ORDER_BY: dict[str, sql.Composable] = {
@@ -40,6 +41,7 @@ LIST_COLUMNS = (
     "pds",
     "id_referensi",
     "is_active",
+    "sumber",
     "first_seen_at",
     "last_seen_at",
     "updated_at",
@@ -61,6 +63,7 @@ class PaketFilter:
     pemilihan: tuple[tuple[int, int], ...] = ()
     pagu_min: int | None = None
     pagu_max: int | None = None
+    sumber: Sumber | None = None
 
     def where(self) -> tuple[sql.Composable, list[Any]]:
         clauses: list[sql.Composable] = [sql.SQL("tahun_anggaran = %s")]
@@ -84,6 +87,9 @@ class PaketFilter:
         if self.pagu_max is not None:
             clauses.append(sql.SQL("pagu <= %s"))
             params.append(self.pagu_max)
+        if self.sumber:
+            clauses.append(sql.SQL("sumber @> %s::text[]"))
+            params.append([self.sumber])
         return sql.SQL(" AND ").join(clauses), params
 
 
@@ -113,8 +119,9 @@ def list_query(
 
 
 DETAIL_QUERY = sql.SQL(
-    "SELECT {cols}, coalesce(r.raw, '{{}}'::jsonb) AS raw "
-    "FROM paket p LEFT JOIN paket_raw r ON r.id = p.id WHERE p.id = %s"
+    "SELECT {cols}, coalesce(r.raw, i.raw, '{{}}'::jsonb) AS raw "
+    "FROM paket p LEFT JOIN paket_raw r ON r.id = p.id "
+    "LEFT JOIN inaproc_rup i ON i.kode_rup = p.id WHERE p.id = %s"
 ).format(cols=sql.SQL(", ").join(sql.Identifier("p", c) for c in LIST_COLUMNS))
 
 RUNS_QUERY = sql.SQL(
