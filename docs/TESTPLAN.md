@@ -69,3 +69,29 @@ pagu sangat besar (2^63, 10^30), `pemilihan_bulan` berulang (100 kali), halaman 
 Pada salinan kode di folder sementara, batas pengaman diubah sengaja (batas turun 20% → 99%,
 kelengkapan 99% → 0, penjaga total-nol dimatikan, 429 tidak diulang, batas baris rusak 50% → 99%).
 Tes harus gagal; hasilnya ada di laporan QA.
+
+---
+
+# Pembaruan 11 Nov 2026 (uji ulang setelah review keamanan)
+
+Kode yang diuji: `main` @ `e47a304` (commit `3165088..e47a304`, belum di-push). Laporan: `docs/QA-REPORT-2026-11-11.md`.
+
+## Perubahan pada rencana
+
+| Area | Perubahan | Cara menguji | Tes otomatis baru/ubahan |
+|---|---|---|---|
+| Kata kunci `paket`/`satuan_kerja` (M1/F-01, D2, D3) | Wajib ada 3 huruf/angka berurutan, tanpa karakter kontrol → 422 | 18 nilai (`%%%`, `___`, `a..`, emoji, NUL, tab, DEL, `100%`, `ab1`, …) ke sistem hidup | `test_untrigrammable_keywords_rejected_fast`, `test_validation_errors` |
+| Beban berlebih (F-01) | `statement_timeout` 3 detik, batas pencarian serentak (429 + `Retry-After`), pool penuh → 503 "sibuk" | 20 permintaan serentak tak-bertrigram; 30 serentak gabungan berat; periksa `/health` dan detail selama itu | `test_search_slots_full_returns_429_but_health_and_detail_work`, `test_concurrent_slow_searches_do_not_starve_pool` |
+| Halaman kosong di tengah run (M2/F-02, D4) | Jadi error yang diulang; run `failed`, checkpoint utuh, tanpa penonaktifan | SIRUP palsu mode `emptymid` dan `emptylast`, lalu SIRUP pulih → harus melanjutkan | `test_empty_page_before_total_fails_run_and_keeps_checkpoint`, `test_empty_page_before_records_total_is_retried_then_fails` |
+| Penonaktifan 2 kali berturut-turut (F-05) | `missing_runs`, `rows_missing`; nonaktif hanya setelah hilang di 2 run lengkap berturut-turut | SIRUP palsu mode `skip` (10% hilang): run 2 = missing 100/nonaktif 0, run 3 = nonaktif 100, muncul lagi = aktif; hilang–muncul–hilang tidak menonaktifkan | `test_missing_package_deactivated_after_two_complete_runs` |
+| Filter `pemilihan=YYYY-MM` (D6, migrasi 0005) | Menggantikan `pemilihan_bulan` | Format valid/tidak valid (13 kasus), 24 vs 25 nilai, gabungan dengan filter lain, `pemilihan_bulan` lama | `test_filter_pemilihan_month_and_year`, `test_pemilihan_tahun_returned`, `test_pemilihan_tahun_parsed_by_database` |
+| Pagu negatif | Diterima | SIRUP palsu mode `negpagu`: 10 baris negatif tersimpan | `test_negative_pagu_from_sirup_is_kept` |
+| Akses jarak jauh (M3/F-03) | SSH tunnel bawaan; profil `https` (Caddy) opsional | `docker compose config` bawaan vs `--profile https`; `caddy validate`; Caddy tanpa `API_DOMAIN` menolak jalan; tidak ada saran `0.0.0.0` | — |
+| F-10 / F-11 / F-12 / F-14 | Log kegagalan CLI; kesalahan konfigurasi tidak membocorkan nilai; resume hanya hari WIB yang sama dan < 20 jam; backup umask 077 + timeout | Lihat laporan | `test_config_errors_do_not_echo_secrets`, `test_once_logs_failures_before_exit_code`, `test_failed_run_from_previous_wib_day_is_not_resumed` |
+| AC-03 / AC-10 | Dinilai dari run 4 (02:00 WIB) dan backup 11 Nov | Bandingkan `recordsTotal` SIRUP (1 permintaan) dengan database; pulihkan dump 11 Nov + migrasi | — |
+
+## Skrip uji ulang (di folder sementara sesi, bukan di repo)
+
+`qa2.py` (kata kunci, pemilihan, serentak, latensi 4 benih × 92 permintaan), `qa2h.py` (campuran berat),
+`qa7.py` (regresi filter), `fake_sirup.py` (SIRUP palsu: `ok`, `skip`, `emptymid`, `emptylast`, `negpagu`, `always429`, …),
+`mutate.py` (uji mutasi). Perintah otomatis tetap: `ruff check .` dan `pytest -q` dengan `TEST_DATABASE_URL`.
