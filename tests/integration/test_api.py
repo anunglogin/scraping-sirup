@@ -17,6 +17,10 @@ from sirup.api.main import create_app
 KEY = "test-key-" + "x" * 30
 KEY2 = "second-key-" + "y" * 30
 H = {"X-API-Key": KEY}
+MONTHS = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]  # fmt: skip
 
 PAKET = [
     # id, nama, pagu, satker, bulan, active, tahun
@@ -39,8 +43,9 @@ def seeded(db) -> None:
             cur.execute(
                 """
                 INSERT INTO paket (id, tahun_anggaran, nama_paket, pagu, id_jenis_pengadaan,
-                    jenis_pengadaan, id_bulan, satuan_kerja, is_active, first_seen_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    jenis_pengadaan, id_bulan, pemilihan, satuan_kerja, is_active,
+                    first_seen_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                         now() - make_interval(hours => %s))
                 """,
                 (
@@ -51,6 +56,8 @@ def seeded(db) -> None:
                     None if pid == 7 else 1,  # SIRUP has packages without a type
                     None if pid == 7 else "Barang",
                     bulan,
+                    # package 5 is planned for May 2025, still in tahun anggaran 2026
+                    f"{MONTHS[bulan - 1]} {2025 if pid == 5 else 2026}",
                     satker,
                     active,
                     100 - i,
@@ -121,9 +128,19 @@ def test_filter_satuan_kerja(client, seeded):
     assert sorted(ids(search(client, satuan_kerja="puskesmas"))) == [4, 5]
 
 
-def test_filter_pemilihan_bulan_repeatable(client, seeded):
-    assert sorted(ids(search(client, pemilihan_bulan=4))) == [2, 3]
-    assert sorted(ids(search(client, pemilihan_bulan=[3, 4]))) == [1, 2, 3]
+def test_filter_pemilihan_month_and_year(client, seeded):
+    assert sorted(ids(search(client, pemilihan="2026-04"))) == [2, 3]
+    assert sorted(ids(search(client, pemilihan=["2026-03", "2026-04"]))) == [1, 2, 3]
+    # same month, different year: kept apart (owner decision 11 Nov 2026)
+    assert ids(search(client, pemilihan="2026-05")) == [4]
+    assert ids(search(client, pemilihan="2025-05")) == [5]
+    assert sorted(ids(search(client, pemilihan=["2025-05", "2026-05"]))) == [4, 5]
+    assert ids(search(client, pemilihan=" 2026-06 ")) == [7, 6]
+
+
+def test_pemilihan_tahun_returned(client, seeded):
+    body = client.get("/v1/paket/5", headers=H).json()
+    assert (body["pemilihan"], body["pemilihan_tahun"], body["id_bulan"]) == ("May 2025", 2025, 5)
 
 
 def test_filter_pagu_range(client, seeded):
@@ -138,11 +155,11 @@ def test_filters_combined(client, seeded):
         client,
         paket="laptop",
         satuan_kerja="pendidikan",
-        pemilihan_bulan=[3, 4],
+        pemilihan=["2026-03", "2026-04"],
         pagu_min=500_000_000,
     )
     assert ids(resp) == [2]
-    assert ids(search(client, paket="laptop", pemilihan_bulan=3)) == [1]
+    assert ids(search(client, paket="laptop", pemilihan="2026-03")) == [1]
     assert ids(search(client, satuan_kerja="kesehatan", pagu_max=1)) == []
 
 
@@ -187,8 +204,15 @@ def test_default_page_size_and_fields(client, seeded):
     "params",
     [
         {"pagu_min": 10, "pagu_max": 5},
-        {"pemilihan_bulan": 13},
-        {"pemilihan_bulan": 0},
+        {"pemilihan": "2026-13"},
+        {"pemilihan": "2026-00"},
+        {"pemilihan": "1999-01"},
+        {"pemilihan": "2101-01"},
+        {"pemilihan": "2026-3"},
+        {"pemilihan": "03-2026"},
+        {"pemilihan": "2026/03"},
+        {"pemilihan": "Maret 2026"},
+        {"pemilihan": ["2026-01"] * 25},
         {"paket": "ab"},
         {"paket": "%%%"},
         {"paket": "___"},
@@ -265,7 +289,7 @@ def test_openapi_documents_security_and_parameters(client):
     assert op["security"] == [{"KunciAPI": []}]
     params = {p["name"]: p for p in op["parameters"]}
     expected = {
-        "paket", "satuan_kerja", "pemilihan_bulan", "pagu_min", "pagu_max",
+        "paket", "satuan_kerja", "pemilihan", "pagu_min", "pagu_max",
         "tahun", "aktif", "sort", "page", "size",
     }  # fmt: skip
     assert set(params) == expected

@@ -18,6 +18,7 @@ _PAKET_EXAMPLE: dict[str, Any] = {
     "metode": "Pengadaan Langsung",
     "id_bulan": 12,
     "pemilihan": "December 2025",
+    "pemilihan_tahun": 2025,
     "id_kldi": "D69",
     "kldi": "Provinsi DKI Jakarta",
     "id_satker": 144073,
@@ -56,6 +57,10 @@ class Paket(BaseModel):
     metode: str | None = Field(description="Metode pemilihan, mis. 'Tender', 'E-Purchasing'.")
     id_bulan: int | None = Field(description="Bulan rencana pemilihan penyedia (1–12).")
     pemilihan: str | None = Field(description="Teks waktu pemilihan dari SIRUP, mis. 'April 2026'.")
+    pemilihan_tahun: int | None = Field(
+        description="Tahun rencana pemilihan penyedia, diambil dari teks `pemilihan` "
+        "(mis. 2025 untuk 'December 2025'). Bersama `id_bulan` dipakai filter `pemilihan`."
+    )
     id_kldi: str | None = Field(description="Kode instansi (K/L/D/I).")
     kldi: str | None = Field(description="Nama instansi (Kementerian/Lembaga/Daerah/Instansi).")
     id_satker: int | None = Field(description="Kode satuan kerja.")

@@ -360,3 +360,17 @@ def test_empty_page_before_total_fails_run_and_keeps_checkpoint(db, db_url, empt
     run_scrape(settings(db_url), source)
     assert source.starts[0] == checkpoint
     assert runs(db)[-1]["status"] == "success"
+
+
+def test_pemilihan_tahun_parsed_by_database(db, db_url):  # D6
+    data = rows(5)
+    data[0]["pemilihan"] = "December 2025"
+    data[1]["pemilihan"] = "march 2027"
+    data[2]["pemilihan"] = "Desember 2026"  # not an English month name
+    data[3]["pemilihan"] = None
+    run_scrape(settings(db_url), FakeSource(data))
+    got = dict(db.execute("SELECT id, pemilihan_tahun FROM paket").fetchall())
+    assert got == {1000: 2025, 1001: 2027, 1002: None, 1003: None, 1004: 2026}
+    data[0]["pemilihan"] = "January 2026"  # SIRUP revises the plan: column follows
+    run_scrape(settings(db_url), FakeSource(data))
+    assert db.execute("SELECT pemilihan_tahun FROM paket WHERE id = 1000").fetchone()[0] == 2026

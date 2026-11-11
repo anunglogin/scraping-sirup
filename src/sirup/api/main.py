@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool, PoolTimeout
-from pydantic import AfterValidator, Field, StringConstraints
+from pydantic import AfterValidator, StringConstraints
 
 from sirup import __version__
 from sirup.api.config import ApiSettings
@@ -38,6 +38,7 @@ from sirup.timeutil import current_year
 log = logging.getLogger("sirup.api")
 
 MAX_RESULT_WINDOW = 10_000
+MAX_PEMILIHAN_VALUES = 24
 
 DESCRIPTION = """
 API internal untuk **mencari paket pengadaan pemerintah** yang dikumpulkan setiap malam
@@ -53,7 +54,7 @@ dari [SIRUP](https://sirup.inaproc.id).
 |---|---|
 | `paket` | Nama paket mengandung kata ini |
 | `satuan_kerja` | Nama satuan kerja mengandung kata ini |
-| `pemilihan_bulan` | Bulan pemilihan penyedia (1–12), boleh lebih dari satu |
+| `pemilihan` | Bulan + tahun pemilihan, format `YYYY-MM` (mis. `2026-03`), boleh diulang |
 | `pagu_min` / `pagu_max` | Rentang nilai pagu dalam rupiah |
 
 Semua kata kunci **tidak peka huruf besar/kecil** dan harus memuat minimal **3 huruf/angka
@@ -110,6 +111,21 @@ def _check_search_text(value: str) -> str:
         )
     return value
 
+
+def _check_year_month(value: str) -> str:
+    year, month = int(value[:4]), int(value[5:])
+    if not 1 <= month <= 12:
+        raise ValueError("Bulan harus 01 sampai 12, format YYYY-MM, mis. 2026-03.")
+    if not 2000 <= year <= 2100:
+        raise ValueError("Tahun harus 2000 sampai 2100, format YYYY-MM, mis. 2026-03.")
+    return value
+
+
+YearMonth = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, pattern=r"^[0-9]{4}-[0-9]{2}$"),
+    AfterValidator(_check_year_month),
+]
 
 SearchText = Annotated[
     str,
@@ -208,12 +224,14 @@ def search_paket(
             examples=["puskesmas"],
         ),
     ] = None,
-    pemilihan_bulan: Annotated[
-        list[Annotated[int, Field(ge=1, le=12)]] | None,
+    pemilihan: Annotated[
+        list[YearMonth] | None,
         Query(
-            description="Bulan **pemilihan penyedia** (1 = Januari … 12 = Desember). Boleh "
-            "diulang untuk beberapa bulan: `pemilihan_bulan=1&pemilihan_bulan=2`.",
-            examples=[[3, 4]],
+            description="Bulan dan tahun **pemilihan penyedia**, format `YYYY-MM` "
+            "(mis. `2026-03` = Maret 2026). Boleh diulang, maksimal 24: "
+            "`pemilihan=2026-03&pemilihan=2026-04`. Catatan: tahun anggaran 2026 juga "
+            "berisi paket dengan pemilihan Desember 2025.",
+            examples=[["2026-03", "2026-04"]],
         ),
     ] = None,
     pagu_min: Annotated[
@@ -263,6 +281,10 @@ def search_paket(
         raise _validation_error(
             "pagu_min", "pagu_min tidak boleh lebih besar dari pagu_max", pagu_min
         )
+    if pemilihan and len(pemilihan) > MAX_PEMILIHAN_VALUES:
+        raise _validation_error(
+            "pemilihan", f"Maksimal {MAX_PEMILIHAN_VALUES} nilai pemilihan.", len(pemilihan)
+        )
     if page * size > MAX_RESULT_WINDOW:
         raise _validation_error(
             "page",
@@ -275,7 +297,7 @@ def search_paket(
         aktif=aktif,
         paket=paket or None,
         satuan_kerja=satuan_kerja or None,
-        pemilihan_bulan=tuple(sorted(set(pemilihan_bulan or []))),
+        pemilihan=tuple(sorted({(int(v[:4]), int(v[5:])) for v in pemilihan or []})),
         pagu_min=pagu_min,
         pagu_max=pagu_max,
     )

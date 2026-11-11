@@ -27,6 +27,7 @@ LIST_COLUMNS = (
     "metode",
     "id_bulan",
     "pemilihan",
+    "pemilihan_tahun",
     "id_kldi",
     "kldi",
     "id_satker",
@@ -56,7 +57,8 @@ class PaketFilter:
     aktif: bool
     paket: str | None = None
     satuan_kerja: str | None = None
-    pemilihan_bulan: tuple[int, ...] = ()
+    # (year, month) pairs, e.g. ((2026, 3), (2026, 4))
+    pemilihan: tuple[tuple[int, int], ...] = ()
     pagu_min: int | None = None
     pagu_max: int | None = None
 
@@ -71,9 +73,11 @@ class PaketFilter:
         if self.satuan_kerja:
             clauses.append(sql.SQL("satuan_kerja ILIKE %s ESCAPE '\\'"))
             params.append(f"%{escape_like(self.satuan_kerja)}%")
-        if self.pemilihan_bulan:
-            clauses.append(sql.SQL("id_bulan = ANY(%s)"))
-            params.append(list(self.pemilihan_bulan))
+        if self.pemilihan:
+            pairs = sql.SQL(", ").join(sql.SQL("(%s, %s)") for _ in self.pemilihan)
+            clauses.append(sql.SQL("(pemilihan_tahun, id_bulan) IN ({})").format(pairs))
+            for year, month in self.pemilihan:
+                params.extend((year, month))
         if self.pagu_min is not None:
             clauses.append(sql.SQL("pagu >= %s"))
             params.append(self.pagu_min)
