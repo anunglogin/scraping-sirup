@@ -70,7 +70,7 @@ Isi nilai di `.env`:
 |---|---|
 | `POSTGRES_PASSWORD`, `API_DB_PASSWORD` | Huruf dan angka saja. Buat dengan `python -c "import secrets;print(secrets.token_hex(24))"` |
 | `API_KEYS` | Minimal 24 karakter; boleh lebih dari satu, dipisah koma. Buat dengan `python -c "import secrets;print(secrets.token_urlsafe(32))"` |
-| `API_BIND` | `127.0.0.1` = hanya bisa diakses dari mesin ini. `0.0.0.0` = terbuka ke jaringan (pakai reverse proxy + HTTPS) |
+| `API_BIND` | Biarkan `127.0.0.1` (hanya dari server itu sendiri). Dari luar server pakai SSH tunnel atau profil HTTPS (Caddy); lihat bagian "Akses dari luar server" |
 | `TAHUN_ANGGARAN` | Kosongkan = tahun berjalan |
 | `SCRAPE_TIME` | Jam mulai harian (WIB), bawaan `02:00` |
 
@@ -108,6 +108,15 @@ curl -H "X-API-Key: <kunci>" \
 ```
 Jawaban berisi `total` (dihitung sampai 10.000) dan `total_terbatas` (`true` = lebih dari
 10.000 hasil). Penjelasan lengkap semua filter ada di [docs/API.md](docs/API.md).
+
+### Akses dari luar server
+- **SSH tunnel (bawaan, Rp0):** `ssh -N -L 8000:127.0.0.1:8000 user@IP-SERVER`, lalu buka
+  http://127.0.0.1:8000/docs di komputer sendiri.
+- **HTTPS dengan Caddy (opsional):** isi `API_DOMAIN` di `.env` (DNS A record ke server; domain
+  ±Rp150–200 ribu/tahun kalau belum punya), lalu `docker compose --profile https up -d`.
+  Sertifikat gratis dan diperbarui otomatis.
+- Jangan membuka API dengan `API_BIND=0.0.0.0` (kunci terkirim tanpa enkripsi).
+Detail: [docs/RUNBOOK.md](docs/RUNBOOK.md) §7.
 
 ### Development & tes
 ```bash

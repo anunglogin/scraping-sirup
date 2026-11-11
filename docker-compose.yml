@@ -101,8 +101,15 @@ services:
       DB_POOL_MIN_SIZE: ${DB_POOL_MIN_SIZE:-1}
       DB_POOL_MAX_SIZE: ${DB_POOL_MAX_SIZE:-10}
       SEARCH_MAX_CONCURRENT: ${SEARCH_MAX_CONCURRENT:-}
+      # Trust X-Forwarded-* only from the Caddy container (fixed IP on "edge").
+      FORWARDED_ALLOW_IPS: 10.89.250.2
+    # Host port for local use and SSH tunnels only. Keep API_BIND=127.0.0.1;
+    # from outside the server use an SSH tunnel or the "https" profile (Caddy).
     ports:
       - "${API_BIND:-127.0.0.1}:${API_PORT:-8000}:8000"
+    networks:
+      - default
+      - edge
     healthcheck:
       test:
         - CMD
@@ -137,5 +144,46 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  caddy:
+    # Optional: docker compose --profile https up -d   (needs API_DOMAIN in .env)
+    image: caddy:2.8.4-alpine
+    profiles: ["https"]
+    restart: unless-stopped
+    environment:
+      API_DOMAIN: ${API_DOMAIN:-}
+    # Refuse to start without a domain instead of serving plain HTTP.
+    command:
+      - sh
+      - -c
+      - >-
+        [ -n "$$API_DOMAIN" ] || { echo "API_DOMAIN is not set in .env" >&2; exit 1; };
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./ops/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      edge:
+        ipv4_address: 10.89.250.2
+    logging: *logging
+    depends_on:
+      api:
+        condition: service_healthy
+
+networks:
+  default:
+  # Small private network between Caddy and the API; the fixed address lets
+  # uvicorn trust forwarded headers from Caddy only.
+  edge:
+    ipam:
+      config:
+        - subnet: 10.89.250.0/29
+
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:

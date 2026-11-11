@@ -1,0 +1,17 @@
+# Optional HTTPS front for the API (docker compose --profile https up -d).
+# Caddy gets and renews a free Let's Encrypt certificate for API_DOMAIN
+# automatically; ports 80 and 443 of the server must be reachable.
+{$API_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Cache-Control "no-store"
+		Referrer-Policy "no-referrer"
+		Strict-Transport-Security "max-age=31536000"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	reverse_proxy api:8000
+}

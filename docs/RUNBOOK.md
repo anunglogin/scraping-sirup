@@ -124,12 +124,43 @@ memakai `latest`.
 
 Sebelum memperbarui di server produksi, pastikan ada backup hari itu di folder `backups`.
 
-## 7. Membuka API ke jaringan
+## 7. Membuka API dari luar server
 
-Bawaannya API hanya bisa dibuka dari server itu sendiri (`API_BIND=127.0.0.1`).
-- Untuk jaringan kantor: isi `API_BIND=0.0.0.0` di `.env`, lalu `docker compose up -d api`.
-- Untuk akses dari internet: **wajib** lewat HTTPS, misalnya reverse proxy Caddy (gratis).
-  Jangan membuka port database (memang tidak dibuka oleh sistem ini).
+API hanya mendengarkan di server itu sendiri (`API_BIND=127.0.0.1`). **Jangan** mengubahnya
+ke `0.0.0.0`: kunci API akan terkirim tanpa enkripsi dan bisa disadap. Docker juga melewati
+firewall `ufw` untuk port yang dibuka. Ada dua cara yang aman.
+
+### Cara A (bawaan): SSH tunnel, Rp0, tanpa domain
+Cocok untuk beberapa orang di tim. Setiap orang perlu akun SSH di server.
+
+Di komputer masing-masing (Windows PowerShell, macOS, atau Linux):
+```
+ssh -N -L 8000:127.0.0.1:8000 namauser@ALAMAT-IP-SERVER
+```
+Biarkan jendela itu terbuka, lalu buka http://127.0.0.1:8000/docs di browser komputer
+sendiri. Lalu lintasnya terenkripsi oleh SSH. Tekan Ctrl+C untuk menutup tunnel.
+Kalau port 8000 di komputer sendiri sudah terpakai, ganti angka pertama, misalnya
+`-L 18000:127.0.0.1:8000`, lalu buka http://127.0.0.1:18000/docs.
+
+### Cara B (opsional): HTTPS dengan Caddy, untuk aplikasi lain atau tim yang lebih besar
+1. Siapkan (sub)domain, mis. `sirup.namaperusahaan.co.id`, lalu buat DNS record **A** yang
+   mengarah ke IP server. Biaya: Rp0 kalau sudah punya domain. Kalau belum, domain `.com`
+   atau `.id` sekitar **Rp150.000–200.000 per tahun**.
+2. Buka port 80 dan 443 di firewall server/penyedia VPS.
+3. Isi `API_DOMAIN=sirup.namaperusahaan.co.id` di `.env`.
+4. Nyalakan:
+   ```
+   docker compose --profile https up -d
+   ```
+   Caddy mengambil dan memperbarui sertifikat HTTPS gratis (Let's Encrypt) secara otomatis.
+   Caddy juga menambahkan header keamanan (`nosniff`, `no-store`, HSTS).
+5. Cek: buka `https://sirup.namaperusahaan.co.id/health`, lalu `/docs`.
+   Log: `docker compose logs caddy`.
+
+`API_BIND` tetap `127.0.0.1`; Caddy menghubungi API lewat jaringan internal Docker.
+Port database tidak pernah dibuka ke luar.
+
+Untuk mematikan Caddy: `docker compose --profile https stop caddy`.
 
 ## 8. Pengaturan PostgreSQL dan perawatan
 
