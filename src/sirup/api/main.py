@@ -112,7 +112,12 @@ def _check_search_text(value: str) -> str:
     return value
 
 
+_YEAR_MONTH = re.compile(r"[0-9]{4}-[0-9]{2}")
+
+
 def _check_year_month(value: str) -> str:
+    if not _YEAR_MONTH.fullmatch(value):
+        raise ValueError("Format harus YYYY-MM, mis. 2026-03.")
     year, month = int(value[:4]), int(value[5:])
     if not 1 <= month <= 12:
         raise ValueError("Bulan harus 01 sampai 12, format YYYY-MM, mis. 2026-03.")
@@ -123,7 +128,7 @@ def _check_year_month(value: str) -> str:
 
 YearMonth = Annotated[
     str,
-    StringConstraints(strip_whitespace=True, pattern=r"^[0-9]{4}-[0-9]{2}$"),
+    StringConstraints(strip_whitespace=True),
     AfterValidator(_check_year_month),
 ]
 
