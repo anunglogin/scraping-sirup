@@ -34,7 +34,9 @@ class SirupRow(BaseModel):
 
     id: int = Field(gt=0, le=BIGINT_MAX)
     paket: str
-    pagu: int = Field(ge=0, le=BIGINT_MAX)
+    # Negative values are real: SIRUP lists a few revised packages with pagu < 0
+    # (e.g. id 68897096, -58,598,261). Stored as published; see ADR TD-07.
+    pagu: int = Field(ge=-BIGINT_MAX, le=BIGINT_MAX)
     # Optional: SIRUP really publishes some packages without a procurement type
     # (~200 rows in 2026, e.g. Kantor Bahasa Kepulauan Riau). See ADR TD-06.
     id_jenis_pengadaan: int | None = Field(

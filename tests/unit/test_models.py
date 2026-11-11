@@ -43,7 +43,7 @@ def test_invalid_rows_are_counted_not_fatal():
     rows = [
         missing_id,
         make_row(2, pagu="abc"),
-        make_row(3, pagu=-5),
+        make_row(3, pagu=10**19),  # does not fit BIGINT
         {**make_row(4), "idMetode": 99999},  # does not fit SMALLINT
         {**make_row(5), "paket": None},
         "not a dict",
@@ -80,3 +80,10 @@ def test_validate_page_summarises_reasons():
     assert result.reasons[("<row>", "not_an_object")] == 1
     assert result.sample_ids == [1001, None, 1003]  # at most 3
     assert "pagu:value_error=2" in result.describe()
+
+
+def test_negative_pagu_from_sirup_is_kept():
+    # Real rows from run 4 (11 Nov 2026), e.g. id 68897096 "Belanja Barang dan Jasa BLUD".
+    valid, invalid = parse_rows([make_row(1, pagu=-58598261), make_row(2, pagu="-1413150")])
+    assert invalid == 0
+    assert [v.row.pagu for v in valid] == [-58598261, -1413150]
