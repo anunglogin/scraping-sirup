@@ -104,7 +104,7 @@ docker compose run --rm -e SCRAPE_MAX_PAGES=2 scraper python -m sirup.scraper on
 ### Contoh pemakaian API
 ```bash
 curl -H "X-API-Key: <kunci>" \
-  "http://localhost:8000/v1/paket?paket=laptop&satuan_kerja=dinas&pemilihan_bulan=1&pemilihan_bulan=2&pagu_min=100000000"
+  "http://localhost:8000/v1/paket?paket=laptop&satuan_kerja=dinas&pemilihan=2026-01&pemilihan=2026-02&pagu_min=100000000"
 ```
 Jawaban berisi `total` (dihitung sampai 10.000) dan `total_terbatas` (`true` = lebih dari
 10.000 hasil). Penjelasan lengkap semua filter ada di [docs/API.md](docs/API.md).
@@ -179,10 +179,12 @@ Balasan (format DataTables):
 | `id` | `id` | bigint, PK | ID paket di SIRUP |
 | `tahun_anggaran` | *(parameter)* | smallint | Tahun anggaran |
 | `nama_paket` | `paket` | text | Nama paket (spasi di ujung dibuang) |
-| `pagu` | `pagu` | bigint | Nilai pagu dalam rupiah (dibulatkan) |
+| `pagu` | `pagu` | bigint | Nilai pagu dalam rupiah (dibulatkan). Beberapa paket SIRUP memang bernilai negatif dan disimpan apa adanya |
 | `id_jenis_pengadaan` / `jenis_pengadaan` | `idJenisPengadaan` / `jenisPengadaan` | smallint / text | 1 Barang, 2 Pekerjaan Konstruksi, 3 Jasa Konsultansi, 4 Jasa Lainnya. **Bisa kosong**: ±200 paket SIRUP tidak punya nama jenis (mis. kode 6) |
 | `id_metode` / `metode` | `idMetode` / `metode` | smallint / text | Metode pemilihan, mis. 8 Pengadaan Langsung, 9 E-Purchasing |
 | `id_bulan` / `pemilihan` | `idBulan` / `pemilihan` | smallint / text | Bulan rencana pemilihan penyedia (1–12) / teks "April 2026" |
+| `pemilihan_tahun` | *(dari teks `pemilihan`)* | smallint | Tahun pemilihan, dihitung otomatis oleh database (mis. 2025 untuk "December 2025"); kosong bila teksnya tidak berbentuk "Bulan YYYY" |
+| `missing_runs` | — | smallint | Berapa run lengkap berturut-turut paket ini tidak terlihat; nonaktif setelah 2 |
 | `id_kldi` / `kldi` | `idKldi` / `kldi` | text | Instansi: K = kementerian/lembaga, D = pemerintah daerah |
 | `id_satker` / `satuan_kerja` | `idSatker` / `satuanKerja` | bigint / text | Satuan kerja pemilik paket |
 | `ids_lokasi` / `lokasi` | `idsLokasi` / `lokasi` | text | Lokasi pekerjaan, "Provinsi, Kab/Kota" |
@@ -197,7 +199,7 @@ Balasan (format DataTables):
 | `updated_at` | — | timestamptz | Terakhir isinya berubah |
 
 Indeks: trigram (`pg_trgm`) pada `nama_paket` dan `satuan_kerja` untuk pencarian kata,
-`(tahun_anggaran, id_bulan)`, `(tahun_anggaran, pagu, id)`, dan `(first_seen_at, id)`.
+`(tahun_anggaran, pemilihan_tahun, id_bulan)`, `(tahun_anggaran, pagu, id)`, dan `(first_seen_at, id)`.
 
 ### Tabel `paket_raw`
 

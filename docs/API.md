@@ -41,9 +41,9 @@ admin sudah membukanya (lihat `docs/RUNBOOK.md`, bagian "Membuka API ke jaringan
 
 | Filter | Arti | Contoh |
 |---|---|---|
-| `paket` | Nama paket **mengandung** kata ini (3–100 huruf, huruf besar/kecil sama saja) | `paket=laptop` |
-| `satuan_kerja` | Nama satuan kerja **mengandung** kata ini (3–100 huruf) | `satuan_kerja=puskesmas` |
-| `pemilihan_bulan` | Bulan pemilihan penyedia, 1–12. Boleh diulang | `pemilihan_bulan=3&pemilihan_bulan=4` |
+| `paket` | Nama paket **mengandung** kata ini (3–100 karakter, wajib ada minimal 3 huruf/angka berurutan; huruf besar/kecil sama saja) | `paket=laptop` |
+| `satuan_kerja` | Nama satuan kerja **mengandung** kata ini (aturan sama dengan `paket`) | `satuan_kerja=puskesmas` |
+| `pemilihan` | Bulan **dan tahun** pemilihan penyedia, format `YYYY-MM`. Boleh diulang (maks. 24) | `pemilihan=2026-03&pemilihan=2026-04` |
 | `pagu_min` | Pagu paling kecil (rupiah) | `pagu_min=100000000` |
 | `pagu_max` | Pagu paling besar (rupiah) | `pagu_max=1000000000` |
 | `tahun` | Tahun anggaran (kosong = tahun ini) | `tahun=2026` |
@@ -54,6 +54,15 @@ admin sudah membukanya (lihat `docs/RUNBOOK.md`, bagian "Membuka API ke jaringan
 Semua filter boleh digabung; hasilnya harus cocok dengan **semua** filter yang diisi.
 Hanya 10.000 hasil pertama yang bisa dibuka (`page × size` ≤ 10.000). Kalau lebih,
 persempit filternya.
+
+**Tentang kata kunci:** kata kunci harus memuat minimal **3 huruf/angka berurutan**
+(`laptop`, `100%`, `atk` boleh; `...`, `%%%`, `a..`, emoji tidak boleh) dan tidak boleh berisi
+karakter kontrol. Kata kunci seperti itu tidak bisa dicari cepat dan dulu membuat API macet.
+
+**Tentang `pemilihan`:** tahun anggaran 2026 juga memuat paket yang pemilihannya Desember
+2025. Karena itu filter memakai bulan **dan** tahun: `pemilihan=2025-12` dan
+`pemilihan=2026-12` memberi hasil berbeda. Setiap paket di jawaban memuat `id_bulan` dan
+`pemilihan_tahun`. (Parameter lama `pemilihan_bulan` sudah tidak dipakai sejak 11 Nov 2026.)
 
 **Tentang `total`:** supaya pencarian tetap di bawah 1 detik, jumlah hasil dihitung
 **sampai 10.000 saja**.
@@ -74,6 +83,7 @@ Contoh jawaban:
       "nama_paket": "PENGADAAN LAPTOP UNIT INTELKAM POLSEK JAJARAN POLDA KALBAR",
       "pagu": 2340000000,
       "pemilihan": "February 2026",
+      "pemilihan_tahun": 2026,
       "satuan_kerja": "DITINTELKAM POLDA KALBAR",
       "kldi": "Kepolisian Negara Republik Indonesia",
       "...": "..."
@@ -100,9 +110,14 @@ curl -G "$URL/v1/paket" -H "X-API-Key: $KEY" --data-urlencode "paket=laptop"
 curl -G "$URL/v1/paket" -H "X-API-Key: $KEY" --data-urlencode "satuan_kerja=dinas kesehatan"
 ```
 
-**Bulan pemilihan Maret dan April**
+**Pemilihan Maret dan April 2026**
 ```bash
-curl -G "$URL/v1/paket" -H "X-API-Key: $KEY" -d pemilihan_bulan=3 -d pemilihan_bulan=4
+curl -G "$URL/v1/paket" -H "X-API-Key: $KEY" -d pemilihan=2026-03 -d pemilihan=2026-04
+```
+
+**Pemilihan Desember 2025 saja (masih termasuk tahun anggaran 2026)**
+```bash
+curl -G "$URL/v1/paket" -H "X-API-Key: $KEY" -d pemilihan=2025-12
 ```
 
 **Rentang pagu Rp100 juta – Rp1 miliar**
@@ -119,7 +134,7 @@ curl -G "$URL/v1/paket" -H "X-API-Key: $KEY" \
 **Satuan kerja + bulan**
 ```bash
 curl -G "$URL/v1/paket" -H "X-API-Key: $KEY" \
-  --data-urlencode "satuan_kerja=puskesmas" -d pemilihan_bulan=6
+  --data-urlencode "satuan_kerja=puskesmas" -d pemilihan=2026-06
 ```
 
 **Semua filter digabung, urut pagu terbesar, 50 per halaman**
@@ -127,7 +142,7 @@ curl -G "$URL/v1/paket" -H "X-API-Key: $KEY" \
 curl -G "$URL/v1/paket" -H "X-API-Key: $KEY" \
   --data-urlencode "paket=konstruksi" \
   --data-urlencode "satuan_kerja=pekerjaan umum" \
-  -d pemilihan_bulan=4 -d pemilihan_bulan=5 \
+  -d pemilihan=2026-04 -d pemilihan=2026-05 \
   -d pagu_min=1000000000 -d pagu_max=10000000000 \
   -d sort=pagu_desc -d size=50 -d page=1
 ```
@@ -164,5 +179,6 @@ curl "$URL/health"
 | 200 | Berhasil | — |
 | 401 | Kunci API tidak ada atau salah | Periksa header `X-API-Key` |
 | 404 | Paket tidak ditemukan | Periksa ID paket |
-| 422 | Isian filter tidak valid (mis. kata kunci < 3 huruf, bulan 13, `pagu_min` > `pagu_max`, halaman terlalu dalam) | Baca bagian `detail`, perbaiki isian |
-| 503 | Database sedang tidak bisa dihubungi atau pencarian terlalu lama | Coba lagi sebentar lagi; kalau berulang, hubungi admin |
+| 422 | Isian filter tidak valid (mis. kata kunci tanpa 3 huruf/angka berurutan, `pemilihan=2026-13`, `pagu_min` > `pagu_max`, halaman terlalu dalam) | Baca bagian `detail`, perbaiki isian |
+| 429 | Terlalu banyak pencarian bersamaan | Tunggu sesuai header `Retry-After` (2 detik), lalu ulangi |
+| 503 | Server sibuk, database tidak bisa dihubungi, atau pencarian lebih dari 3 detik | Coba lagi sebentar lagi; kalau berulang, hubungi admin |

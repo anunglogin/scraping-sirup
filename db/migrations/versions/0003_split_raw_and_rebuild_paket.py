@@ -3,7 +3,8 @@
 The original SIRUP row (``raw``, ~600 of ~900 bytes per row) made the hot
 ``paket`` heap 3.3 GB for 3.6M rows, so every heap visit (bitmap rechecks,
 pagu-ordered scans, deep pages) read ~3x more pages than needed. The table is
-rebuilt in one transaction (readers keep using the old table until commit),
+rebuilt in one transaction (after DROP TABLE every reader waits until commit;
+needs about 2x the table size in free disk),
 physically ordered by (tahun_anggaran, pagu) so pagu-ordered scans touch
 neighbouring pages, and indexes get an ``id`` tie-break matching the API's
 ORDER BY. See ADR TD-06.

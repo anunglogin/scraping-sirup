@@ -77,7 +77,7 @@ paket baru.
 | AC-03 | Paket baru di SIRUP sudah masuk database paling lambat 24 jam kemudian | Cek paket baru |
 | AC-04 | Kalau pengambilan terputus (internet mati), proses bisa dilanjutkan tanpa mulai dari nol | Matikan di tengah jalan, lalu jalankan lagi |
 | AC-05 | Pengambilan memakai jeda dan berhenti sendiri kalau SIRUP menolak berulang kali | Lihat catatan (log) |
-| AC-06 | API bisa mencari berdasarkan **nama paket** (kata kunci), **pemilihan** (bulan), **pagu** (rentang minimum–maksimum), dan **satuan kerja** (kata kunci), sendiri-sendiri maupun digabung | Uji tiap filter dan gabungannya |
+| AC-06 | API bisa mencari berdasarkan **nama paket** (kata kunci), **pemilihan** (bulan **dan tahun**, mis. Maret 2026; keputusan bos 11 Nov 2026), **pagu** (rentang minimum–maksimum), dan **satuan kerja** (kata kunci), sendiri-sendiri maupun digabung | Uji tiap filter dan gabungannya |
 | AC-07 | Pencarian API selesai dalam waktu **< 1 detik** untuk 95% permintaan | Uji beban |
 | AC-08 | API menolak permintaan tanpa kunci akses yang benar | Uji tanpa kunci |
 | AC-09 | Seluruh sistem menyala dengan `docker compose up -d` | Coba di mesin bersih |
@@ -122,3 +122,6 @@ paket baru.
 - Tanggal disetujui: 10 November 2026 (lewat percakapan: "Setuju, mulai bangun")
 - Perubahan sebelum disetujui: tahun anggaran = tahun berjalan; filter API = paket,
   pemilihan, pagu, satuan kerja.
+- Perubahan sesudah disetujui (11 Nov 2026, keputusan bos): filter **pemilihan** memakai
+  **bulan + tahun** (format `2026-03`), karena tahun anggaran 2026 juga berisi paket dengan
+  pemilihan Desember 2025 (72.151 paket) selain Desember 2026 (6.378 paket).

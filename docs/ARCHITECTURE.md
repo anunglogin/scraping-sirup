@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | **BERLAKU — BRD disetujui 10 Nov 2026** · diperbarui sesuai TD-05 (10 Nov 2026) dan TD-06 (11 Nov 2026) |
+| Status | **BERLAKU — BRD disetujui 10 Nov 2026** · diperbarui sesuai TD-05 (10 Nov 2026), TD-06 dan TD-07 (11 Nov 2026) |
 | Tanggal | 10 November 2026 |
 | Acuan | `docs/BRD.md`, `docs/DECISIONS.md` |
 
@@ -76,20 +76,22 @@ paket bisa terlewat. Celah ini tertutup sendiri pada putaran harian berikutnya.
 tahun = env TAHUN_ANGGARAN or tahun berjalan (Asia/Jakarta)
 ambil advisory lock PostgreSQL            # gagal -> keluar, run lain sedang jalan
 run = run terakhir tahun itu bila status running/failed, checkpoint > 0,
-      dan dimulai < 24 jam lalu (LANJUTKAN, started_at tetap)
+      dimulai pada TANGGAL WIB yang sama dan < 20 jam lalu (LANJUTKAN, started_at tetap)
       selain itu buat baris scrape_runs baru (status=running)
 start = run.checkpoint_start
 loop:
    GET page(start, length=5000, jenisPengadaan='')   # timeout 60s, 5x percobaan, backoff 2..60s
+   halaman kosong padahal start < recordsTotal -> dianggap gangguan (diulang, lalu GAGAL)
    validasi tiap baris (pydantic)          # baris rusak dihitung, tidak menghentikan proses
    bila > 50% baris satu halaman rusak -> run GAGAL (format SIRUP kemungkinan berubah)
    satu transaksi: COPY ke staging -> INSERT ... ON CONFLICT (id) DO UPDATE
-                   (last_seen_at = now(), is_active = true, updated_at berubah hanya
+                   (last_seen_at = now(), is_active = true, missing_runs = 0, updated_at berubah hanya
                     bila isi baris asli berubah) + update penghitung & checkpoint
-   berhenti bila data kosong / start >= recordsTotal / SCRAPE_MAX_PAGES tercapai
+   berhenti bila start >= recordsTotal / SCRAPE_MAX_PAGES tercapai
    sleep(SCRAPE_DELAY_SECONDS=2)
 selesai:
-   tandai is_active=false untuk paket tahun itu yang last_seen_at < run.started_at
+   paket aktif yang last_seen_at < run.started_at: missing_runs + 1 (rows_missing);
+   tandai is_active=false bila missing_runs >= 2 (hilang di 2 run lengkap berturut-turut)
      HANYA bila: run lengkap (bukan dibatasi SCRAPE_MAX_PAGES), recordsTotal > 0,
      baris valid >= 99% recordsTotal, dan recordsTotal tidak turun > 20% dari run
      sukses sebelumnya. Bila tidak, alasannya dicatat di kolom `note`.
@@ -121,13 +123,14 @@ CREATE TABLE paket (
   id                 BIGINT PRIMARY KEY,          -- id SIRUP
   tahun_anggaran     SMALLINT     NOT NULL,
   nama_paket         TEXT         NOT NULL,       -- "paket"
-  pagu               BIGINT       NOT NULL,       -- rupiah
+  pagu               BIGINT       NOT NULL,       -- rupiah; bisa negatif (data SIRUP, TD-07)
   id_jenis_pengadaan SMALLINT,                    -- boleh kosong: ada paket SIRUP tanpa jenis (TD-06)
   jenis_pengadaan    TEXT,
   id_metode          SMALLINT,
   metode             TEXT,
   id_bulan           SMALLINT,                    -- bulan pemilihan 1-12
   pemilihan          TEXT,                        -- "April 2026"
+  pemilihan_tahun    SMALLINT GENERATED ALWAYS AS (tahun dari teks pemilihan) STORED, -- TD-07
   id_kldi            TEXT,
   kldi               TEXT,
   id_satker          BIGINT,
@@ -140,6 +143,7 @@ CREATE TABLE paket (
   pds                BOOLEAN,
   id_referensi       INTEGER,
   is_active          BOOLEAN      NOT NULL DEFAULT true,
+  missing_runs       SMALLINT     NOT NULL DEFAULT 0, -- run lengkap berturut-turut tanpa paket ini (TD-07)
   first_seen_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
   last_seen_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
   updated_at         TIMESTAMPTZ  NOT NULL DEFAULT now()  -- berubah hanya bila isi berubah
@@ -147,7 +151,7 @@ CREATE TABLE paket (
 
 CREATE INDEX ix_paket_nama_trgm   ON paket USING gin (nama_paket gin_trgm_ops);
 CREATE INDEX ix_paket_satker_trgm ON paket USING gin (satuan_kerja gin_trgm_ops);
-CREATE INDEX ix_paket_bulan       ON paket (tahun_anggaran, id_bulan);
+CREATE INDEX ix_paket_pemilihan   ON paket (tahun_anggaran, pemilihan_tahun, id_bulan);
 CREATE INDEX ix_paket_pagu        ON paket (tahun_anggaran, pagu, id);
 CREATE INDEX ix_paket_first_seen ON paket (first_seen_at DESC, id DESC);   -- "paket baru"
 
@@ -168,6 +172,7 @@ CREATE TABLE scrape_runs (
   rows_inserted    INTEGER NOT NULL DEFAULT 0,
   rows_updated     INTEGER NOT NULL DEFAULT 0,   -- isi berubah
   rows_invalid     INTEGER NOT NULL DEFAULT 0,
+  rows_missing     INTEGER NOT NULL DEFAULT 0,   -- paket aktif yang tidak terlihat (TD-07)
   rows_deactivated INTEGER NOT NULL DEFAULT 0,
   checkpoint_start INTEGER NOT NULL DEFAULT 0,
   error            TEXT,
@@ -177,7 +182,8 @@ CREATE INDEX ix_scrape_runs_year ON scrape_runs (tahun_anggaran, id DESC);
 ```
 
 Migrasi (SQL mentah, semuanya punya `downgrade`): `0001_initial_schema`,
-`0002_jenis_pengadaan_nullable`, `0003_split_raw_and_rebuild_paket`. Migrasi 0003
+`0002_jenis_pengadaan_nullable`, `0003_split_raw_and_rebuild_paket`, `0004_missing_runs`,
+`0005_pemilihan_tahun`. Migrasi 0003
 membangun ulang tabel `paket` (±5 menit untuk 3,6 juta baris; API tertahan selama itu).
 Setelahnya jalankan `VACUUM (ANALYZE)` (lihat RUNBOOK).
 
@@ -186,7 +192,10 @@ Ukuran terukur (11 Nov 2026, 3,6 juta baris): `paket` 1,9 GB (data 1,1 GB + inde
 
 ## 6. Kontrak API (v1)
 
-Semua endpoint, kecuali `/health`, wajib memakai header `X-API-Key`. Kunci disimpan di
+Semua endpoint di bawah `/v1/` wajib memakai header `X-API-Key`. Tanpa kunci: `/health` dan
+dokumentasi (`/docs`, `/redoc`, `/openapi.json`); dokumentasi sengaja terbuka karena
+diminta bos dan tidak berisi data. Akses dari luar server hanya lewat SSH tunnel atau
+HTTPS (Caddy), lihat RUNBOOK §7. Kunci disimpan di
 environment variable `API_KEYS` (bisa lebih dari satu, dipisah koma). Parameter
 divalidasi dengan Pydantic; nilai yang tidak valid dibalas **422**.
 
@@ -197,10 +206,10 @@ bersifat opsional dan bisa digabung (logika DAN).
 
 | Query | Tipe | Arti | Contoh |
 |---|---|---|---|
-| `paket` | teks, 3–100 karakter | Nama paket **mengandung** kata ini (tidak peka huruf besar/kecil) | `laptop` |
-| `satuan_kerja` | teks, 3–100 karakter | Nama satuan kerja **mengandung** kata ini | `puskesmas` |
-| `pemilihan_bulan` | int[] 1–12 | Bulan pemilihan penyedia (kolom `idBulan`) | `pemilihan_bulan=1&pemilihan_bulan=2` |
-| `pagu_min`, `pagu_max` | int ≥ 0, rupiah | Rentang pagu; `pagu_min` ≤ `pagu_max`, kalau tidak dibalas 422 | `pagu_min=100000000` |
+| `paket` | teks, 3–100 karakter, wajib ada 3 huruf/angka berurutan, tanpa karakter kontrol | Nama paket **mengandung** kata ini (tidak peka huruf besar/kecil) | `laptop` |
+| `satuan_kerja` | teks, aturan sama dengan `paket` | Nama satuan kerja **mengandung** kata ini | `puskesmas` |
+| `pemilihan` | `YYYY-MM`[], maks. 24, bulan 01–12, tahun 2000–2100 | Bulan **dan tahun** pemilihan penyedia (`pemilihan_tahun` + `id_bulan`); keputusan bos 11 Nov 2026 | `pemilihan=2026-03&pemilihan=2026-04` |
+| `pagu_min`, `pagu_max` | int ≥ 0, rupiah (paket berpagu negatif hanya muncul tanpa `pagu_min`) | Rentang pagu; `pagu_min` ≤ `pagu_max`, kalau tidak dibalas 422 | `pagu_min=100000000` |
 
 **Pendukung:**
 
@@ -247,6 +256,35 @@ Contoh balasan:
 indeks trigram bisa lewat sedikit dari 1 detik, lalu cepat lagi. Diukur di mesin pengembang
 dengan pengaturan PostgreSQL untuk VPS 4 GB; angka di VPS asli perlu dicek ulang (T8).
 
+**Perlindungan beban (TD-07):** paling banyak `ukuran pool - 2` pencarian (bawaan 8) berjalan
+bersamaan. Pencarian berikutnya menunggu 1 detik, lalu dibalas **429** + `Retry-After: 2`.
+Dengan begitu `/health` dan detail paket selalu punya koneksi. Query yang lebih dari 3 detik
+dihentikan (`statement_timeout`) dan dibalas 503.
+
+**Kecepatan sesudah TD-07** (11 Nov 2026, 3,66 juta paket, migrasi 0005, 12 pencarian × 3, curl;
+detik). `pemilihan_bulan=1` diganti `pemilihan=2026-01`; pencarian gabungan memakai
+`pemilihan=2026-03`.
+
+| Pencarian | 3 kali (detik) |
+|---|---|
+| `size=20` | 0,026 / 0,022 / 0,022 |
+| `sort=terbaru` | 0,018 / 0,033 / 0,022 |
+| `paket=laptop` | 0,124 / 0,099 / 0,103 |
+| `paket=belanja` | 0,057 / 0,056 / 0,058 |
+| `paket=komputer&pagu_min=100000000` | 0,515 / 0,241 / 0,248 |
+| `satuan_kerja=puskesmas` | 0,303 / 0,236 / 0,209 |
+| `satuan_kerja=dinas` | 0,096 / 0,078 / 0,068 |
+| `pemilihan=2026-01` | 0,024 / 0,026 / 0,050 |
+| `pagu_min=1000000000` | 0,089 / 0,045 / 0,032 |
+| `pagu_min=100000000&pagu_max=500000000` | 0,088 / 0,042 / 0,037 |
+| `paket=makan&satuan_kerja=dinas&pemilihan=2026-03&pagu_min=50000000` | **0,931 / 0,999 / 0,865** |
+| `paket=belanja&page=500&size=20` | 0,191 / 0,180 / 0,161 |
+| **p95 (36 permintaan)** | **0,93** |
+
+Pencarian gabungan dua kata kunci (D1/F-09) kini paling lambat dan mepet 1 detik. Penyebabnya,
+database menggabungkan indeks trigram `dinas` (±1,5 juta baris) secara utuh. Optimasinya
+menunggu keputusan bos.
+
 ### Endpoint lain
 - `GET /v1/paket/{id}`: satu paket beserta `raw` (dari `paket_raw`); 404 kalau tidak ada.
 - `GET /v1/scrape-runs?limit=20`: riwayat pengambilan data (AC-11).
@@ -254,7 +292,7 @@ dengan pengaturan PostgreSQL untuk VPS 4 GB; angka di VPS asli perlu dicek ulang
 
 User database untuk API **hanya punya akses baca** (read-only role, dibuat oleh
 `db/init/10-api-role.sh`). Koneksi API juga memakai `default_transaction_read_only=on`
-dan `statement_timeout` 10 detik. Dokumentasi interaktif: Swagger `/docs`, ReDoc `/redoc`
+dan `statement_timeout` 3 detik (`DB_STATEMENT_TIMEOUT_MS`). Dokumentasi interaktif: Swagger `/docs`, ReDoc `/redoc`
 (lihat `docs/API.md`).
 
 ## 7. Konfigurasi (`.env.example`)
@@ -311,8 +349,8 @@ sirup/
 - **Backup:** container `backup` mengecek setiap 10 menit; setelah pukul 04:00 WIB dibuat
   `pg_dump` hari itu (sekali sehari) ke folder `./backups`, disimpan 7 hari. Pemulihannya diuji
   sebelum go-live (AC-10).
-- Port database **tidak** dibuka ke luar. API sebaiknya diletakkan di belakang reverse
-  proxy dengan HTTPS (Caddy, gratis) kalau diakses dari luar kantor.
+- Port database **tidak** dibuka ke luar. API hanya di `127.0.0.1`; dari luar server lewat
+  SSH tunnel (bawaan) atau profil `https` (Caddy, sertifikat otomatis), lihat TD-07.
 
 ## 10. Pembagian tugas
 

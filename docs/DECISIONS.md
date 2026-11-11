@@ -124,3 +124,65 @@
   - `total` bukan angka persis kalau hasilnya lebih dari 10.000.
   - Detail paket (`/v1/paket/{id}`) mengambil `raw` dari `paket_raw`.
 - **Biaya:** Rp0.
+
+## TD-07 — Perbaikan sebelum deploy (hasil QA 10 Nov dan review keamanan)
+- **Tanggal:** 11 Nov 2026 · **Status:** Berlaku
+- **Acuan:** `docs/REVIEW-2026-11-10.md` (vonis TAHAN DEPLOY: M1–M3), `docs/QA-REPORT-2026-11-10.md`.
+- **Keputusan:**
+  1. **API tidak bisa dibuat macet oleh pencarian aneh (M1 / F-01).**
+     - Kata kunci `paket` dan `satuan_kerja` wajib memuat minimal 3 huruf/angka berurutan dan
+       tidak boleh berisi karakter kontrol. Kalau tidak, dibalas 422 dengan pesan jelas.
+       Kata kunci seperti `...`, `a..`, `%%%`, atau emoji dulu memaksa database membaca semua
+       baris.
+     - Batas waktu query diturunkan dari 10 detik menjadi **3 detik**.
+     - Paling banyak `ukuran pool - 2` pencarian (bawaan 8) boleh berjalan bersamaan.
+       Pencarian berikutnya menunggu 1 detik, lalu dibalas **429** dengan `Retry-After: 2`.
+       Dengan begitu `/health` dan detail paket selalu tetap jalan.
+     - Pesan 503 sekarang membedakan "server sibuk" dari "database mati".
+     - Semua batas ini bisa diatur lewat `.env` (`DB_STATEMENT_TIMEOUT_MS`, `DB_POOL_*`,
+       `SEARCH_MAX_CONCURRENT`).
+  2. **Halaman kosong di tengah run = gagal (M2 / F-02).** Halaman kosong padahal posisi
+     belum mencapai `recordsTotal` dianggap gangguan SIRUP: dicoba ulang, lalu run berstatus
+     `failed` dengan checkpoint utuh. Run seperti ini tidak lagi berstatus "berhasil" dan
+     tidak menonaktifkan paket.
+  3. **Paket baru ditandai hilang setelah 2 run lengkap berturut-turut (F-05).** Kolom
+     `paket.missing_runs` dan `scrape_runs.rows_missing` (migrasi 0004). Paket yang sudah
+     nonaktif sebelum migrasi dianggap sudah 2 kali hilang. Pengaman lama (run sebagian,
+     anjlok > 20%, < 99%) tetap berlaku.
+  4. **Filter pemilihan = bulan + tahun (keputusan bos 11 Nov 2026, D6).**
+     - Parameter `pemilihan=YYYY-MM` (boleh diulang, maks. 24) menggantikan
+       `pemilihan_bulan`. Ini perubahan yang memutus kompatibilitas: parameter lama diabaikan.
+     - Tahun diambil dari teks SIRUP ("December 2025") ke kolom `pemilihan_tahun`.
+     - **Penyimpangan dari brief:** kolom ini dihitung oleh **database** (kolom STORED
+       generated, migrasi 0005), bukan ditulis oleh scraper. Hasilnya sama ("diisi untuk data
+       baru"), tetapi isi lama dan baru tidak mungkin berbeda aturan.
+     - Indeks `(tahun_anggaran, pemilihan_tahun, id_bulan)` menggantikan `ix_paket_bulan`.
+  5. **Akses dari luar server (M3 / F-03).**
+     - Saran `API_BIND=0.0.0.0` dihapus.
+     - Cara bawaan: SSH tunnel (Rp0).
+     - Pilihan: profil `https` dengan Caddy 2.8.4 (sertifikat Let's Encrypt otomatis, header
+       `nosniff`/`no-store`/HSTS). Butuh domain; ±Rp150–200 ribu/tahun kalau belum punya.
+     - Uvicorn hanya memercayai header forwarded dari alamat tetap Caddy (`10.89.250.2`).
+  6. **Paket berpagu negatif disimpan.** Run 4 menolak 3 paket karena pagu < 0 (mis. id
+     68897096 "Belanja Barang dan Jasa BLUD", −58.598.261, Puskesmas Antang). Paket ini asli
+     di SIRUP, jadi disimpan apa adanya. Paket ini hanya muncul kalau `pagu_min` tidak diisi.
+  7. **Perbaikan kecil:**
+     - F-10: kegagalan CLI selalu dicatat di log.
+     - F-11: pesan error konfigurasi tidak lagi menampilkan `API_KEYS`/`DATABASE_URL`.
+     - F-12: checkpoint hanya dilanjutkan dari run pada **tanggal WIB yang sama** dan
+       < 20 jam.
+     - F-14: file backup hanya bisa dibaca pemiliknya (`umask 077`), dan `pg_dump` dibatasi
+       3 jam.
+     - I-01: dokumen sekarang menyebut dengan benar endpoint mana yang terbuka tanpa kunci.
+- **Hasil ukur:**
+  - 20 pencarian aneh serentak semuanya dijawab 422 dalam ≤ 0,40 detik. Selama itu
+    pencarian normal 0,25 detik dan `/health` 0,01 detik.
+  - 30 pencarian gabungan berat serentak: 8 dijawab 200, 22 dijawab 429. Selama itu
+    `/health` 0,03 detik dan detail paket 0,02 detik.
+  - Kecepatan (12 pencarian × 3): p95 **0,93 detik** (lihat ARCHITECTURE §6).
+  - Migrasi 0004 + 0005 pada 3,66 juta baris: **9 menit 45 detik**. API tertahan selama
+    itu, jadi jalankan di luar jam kerja.
+- **Belum dikerjakan (menunggu keputusan bos):** F-04 pemberitahuan gagal (Healthchecks.io),
+  F-06 role non-superuser, F-07 lockfile/pin digest, F-08 backup di luar VPS, F-09/D1
+  pencarian gabungan, F-13 pengetatan CI, F-15 batas memori, F-16 header di API sendiri.
+- **Biaya:** Rp0 (domain opsional untuk HTTPS).
