@@ -3,10 +3,14 @@
 Sistem ini mengambil **semua paket pengadaan penyedia** dari
 [SIRUP](https://sirup.inaproc.id) (Rencana Umum Pengadaan pemerintah) setiap malam,
 menyimpannya ke **PostgreSQL**, lalu menyediakan **API internal** untuk mencari peluang
-tender berdasarkan nama paket, bulan pemilihan, pagu, dan satuan kerja.
+tender berdasarkan nama paket, bulan pemilihan, pagu, satuan kerja, dan sumber data.
+Sebagai sumber kedua, paket dari [data.inaproc.id](https://data.inaproc.id/rup) bisa
+ditambahkan lewat pengambil INAPROC yang dijalankan manual.
 
 - Tahun anggaran: otomatis **tahun berjalan** (WIB)
-- Volume: ±3,6 juta paket per tahun (data 2026)
+- Volume: ±3,6 juta paket per tahun dari SIRUP (data 2026), ditambah paket INAPROC
+  yang sudah diambil
+- Setiap paket punya penanda `sumber`: `sirup`, `inaproc`, atau keduanya
 - Dokumentasi API interaktif: **Swagger** di `/docs`, **ReDoc** di `/redoc`
 
 ---
@@ -14,22 +18,37 @@ tender berdasarkan nama paket, bulan pemilihan, pagu, dan satuan kerja.
 ## Cara kerja (sekilas)
 
 ```
-            setiap hari 02:00 WIB
- ┌──────────┐   GET 5.000 paket/permintaan   ┌──────────┐
- │  SIRUP   │ ◄───────────────────────────── │ scraper  │
- │ (publik) │ ─────────────────────────────► │ (Python) │
- └──────────┘   JSON, urut berdasarkan id    └────┬─────┘
-                                                  │ simpan/perbarui (upsert)
-                                                  ▼
- ┌──────────┐   pg_dump harian 04:00   ┌─────────────────────┐
- │ backups/ │ ◄─────────────────────── │ PostgreSQL 16       │
- └──────────┘                          │ tabel paket,        │
-                                       │ tabel scrape_runs   │
-                                       └─────────┬───────────┘
-                                                 │ baca saja
-                                                 ▼
-                     Tim / aplikasi ──►  API FastAPI :8000 (X-API-Key)
+     SUMBER 1 (otomatis, 02:00 WIB)              SUMBER 2 (manual, bila dijalankan)
+ ┌──────────┐                                   ┌──────────────────┐
+ │  SIRUP   │  5.000 paket/permintaan           │ data.inaproc.id  │ 100 baris/permintaan
+ │ (publik) │                                   │ (izin tertulis)  │ + cursor halaman
+ └────┬─────┘                                   └────────┬─────────┘
+      │ ▲                                                │ ▲
+      ▼ │                                                ▼ │
+ ┌──────────┐                                   ┌──────────────────┐   output/inaproc/
+ │ scraper  │                                   │ pengambil        │──► .jsonl .csv
+ │  SIRUP   │                                   │ INAPROC          │    state (posisi)
+ └────┬─────┘                                   └────────┬─────────┘
+      │ upsert, sumber += sirup                          │ upsert ke inaproc_rup,
+      │                                                  │ lalu gabung ke paket
+      ▼                                                  ▼ (sumber += inaproc)
+ ┌─────────────────────────────────────────────────────────────────┐
+ │ PostgreSQL 16                                                   │
+ │   paket        satu baris per kode RUP, kolom sumber            │
+ │   paket_raw    baris asli SIRUP                                 │
+ │   inaproc_rup  salinan lengkap data INAPROC                     │
+ │   scrape_runs  riwayat putaran SIRUP                            │
+ └───────────────┬─────────────────────────────────────┬───────────┘
+                 │ baca saja                           │ pg_dump harian 04:00
+                 ▼                                     ▼
+     API FastAPI :8000 (X-API-Key)               backups/
+     /v1/paket?sumber=sirup|inaproc
+                 ▲
+                 │
+        Tim / aplikasi
 ```
+
+**Sumber 1: SIRUP (otomatis setiap malam)**
 
 1. **Ambil.** Scraper meminta data ke SIRUP per halaman (5.000 paket), diurutkan
    berdasarkan `id`, dengan jeda 2 detik di antara permintaan. Satu putaran penuh berisi
@@ -38,15 +57,31 @@ tender berdasarkan nama paket, bulan pemilihan, pagu, dan satuan kerja.
    lebih dari 50% baris dalam satu halaman rusak, proses berhenti, karena itu tandanya
    format SIRUP berubah.
 3. **Simpan.** Paket baru ditambahkan, paket lama diperbarui (tidak pernah dobel).
-   Kapan sebuah paket pertama kali terlihat dicatat di `first_seen_at`.
+   Kapan sebuah paket pertama kali terlihat dicatat di `first_seen_at`. Paket diberi
+   tanda `sumber` = `sirup`; tanda `inaproc` yang sudah ada tetap dipertahankan.
 4. **Lanjutkan kalau putus.** Posisi halaman terakhir disimpan. Kalau proses terputus,
    putaran berikutnya melanjutkan dari posisi itu, bukan dari nol.
 5. **Tandai yang hilang.** Paket yang tidak muncul lagi di SIRUP (misalnya batal)
    ditandai `is_active = false`, bukan dihapus. Ini hanya dilakukan kalau putarannya
-   lengkap (≥ 99%) dan jumlah total tidak anjlok lebih dari 20%.
-6. **Sajikan.** API membaca database dengan akun yang **hanya bisa membaca**.
-7. **Sumber kedua (manual).** Pengambil INAPROC bisa menambahkan paket dari
-   data.inaproc.id ke tabel yang sama, dengan penanda `sumber`. Lihat
+   lengkap (≥ 99%) dan jumlah total tidak anjlok lebih dari 20%. Paket yang hanya ada
+   di INAPROC tidak pernah dinonaktifkan oleh SIRUP.
+
+**Sumber 2: INAPROC (manual, hanya bila dijalankan)**
+
+6. **Ambil per halaman.** Pengambil INAPROC meminta 100 baris per halaman ke
+   data.inaproc.id dengan header akses dari `.env` (izin tertulis, TD-08), jeda 2 detik.
+7. **Simpan ke file dan database.** Setiap halaman ditulis ke `output/inaproc/` dan
+   disimpan ke tabel `inaproc_rup`. Posisi halaman baru disimpan setelah database
+   berhasil, jadi tidak ada baris yang terlewat.
+8. **Gabung ke `paket`.** Kalau paketnya sudah ada dari SIRUP, isinya tetap dari SIRUP
+   dan hanya ditambah tanda `inaproc`. Kalau belum ada, paket ditambahkan dengan
+   `sumber` = `inaproc`. Satu kode RUP selalu satu baris.
+
+**Penyajian**
+
+9. **Sajikan.** API membaca database dengan akun yang **hanya bisa membaca**. Filter
+   `sumber=sirup` atau `sumber=inaproc` memilih paket menurut sumbernya. Rincian
+   pengambil INAPROC ada di
    [Sumber kedua: data.inaproc.id](#sumber-kedua-datainaprocid-pengambil-inaproc).
 
 Alasan di balik setiap keputusan teknis ada di [docs/DECISIONS.md](docs/DECISIONS.md).
