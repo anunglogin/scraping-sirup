@@ -6,11 +6,15 @@
 # BACKUP_KEEP_DAYS days. A failed dump is logged and retried on the next tick;
 # the loop itself never exits, so the container does not crash-loop.
 set -u
+# Dumps are readable by the owner only (review F-14).
+umask 077
 
 BACKUP_DIR="${BACKUP_DIR:-/backups}"
 BACKUP_HOUR="${BACKUP_HOUR:-4}"
 BACKUP_KEEP_DAYS="${BACKUP_KEEP_DAYS:-7}"
 INTERVAL_SECONDS="${BACKUP_INTERVAL_SECONDS:-600}"
+# A hung pg_dump must not block every later backup.
+DUMP_TIMEOUT="${BACKUP_DUMP_TIMEOUT:-3h}"
 
 mkdir -p "$BACKUP_DIR"
 echo "backup loop started: hour>=${BACKUP_HOUR} keep=${BACKUP_KEEP_DAYS}d dir=${BACKUP_DIR}"
@@ -23,7 +27,7 @@ while true; do
 
   if [ "$hour" -ge "$BACKUP_HOUR" ] && [ ! -f "$file" ]; then
     echo "$(date -Iseconds) creating ${file}"
-    if pg_dump --format=custom --no-owner --file="${file}.tmp"; then
+    if timeout "$DUMP_TIMEOUT" pg_dump --format=custom --no-owner --file="${file}.tmp"; then
       mv "${file}.tmp" "$file"
       echo "$(date -Iseconds) backup ok: $(du -h "$file" | cut -f1)"
       find "$BACKUP_DIR" -maxdepth 1 -name 'sirup-*.dump' -type f \

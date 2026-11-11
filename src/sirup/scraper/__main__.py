@@ -24,6 +24,9 @@ def _once(settings: ScraperSettings) -> int:
         log.error("%s", exc)
         return 2
     except Exception:
+        # Log the cause here too: failures before the run row exists (DB down,
+        # lock/connect errors) would otherwise vanish (review F-10).
+        log.exception("scrape run failed")
         return 1
     log.info("done: %s", result)
     return 0

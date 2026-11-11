@@ -92,3 +92,16 @@ def test_config_errors_do_not_echo_secrets(monkeypatch):
     with pytest.raises(ValidationError) as exc2:
         ScraperSettings()
     assert "topsecretpw" not in str(exc2.value) and "99999" not in str(exc2.value)
+
+
+def test_once_logs_failures_before_exit_code(monkeypatch, caplog):  # F-10
+    from sirup.scraper import __main__ as cli
+
+    def boom(*_a, **_k):
+        raise ConnectionError("database is down")
+
+    monkeypatch.setattr(cli, "run_scrape", boom)
+    settings = ScraperSettings(database_url="postgresql://x@127.0.0.1:1/z")
+    with caplog.at_level("ERROR", logger="sirup.scraper"):
+        assert cli._once(settings) == 1
+    assert "scrape run failed" in caplog.text and "database is down" in caplog.text

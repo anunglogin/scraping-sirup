@@ -19,7 +19,10 @@ log = logging.getLogger(__name__)
 # Arbitrary constant identifying "the scraper" in pg_advisory_lock.
 ADVISORY_LOCK_KEY = 7_412_026_001
 
-RESUME_WINDOW = "24 hours"
+# Resume an interrupted run only if it started on the same WIB calendar day and
+# less than this long ago. A run left over from yesterday is never resumed:
+# SIRUP offsets have shifted since, so its checkpoint is stale (review F-12).
+RESUME_WINDOW = "20 hours"
 MIN_COMPLETENESS = 0.99
 MAX_TOTAL_DROP = 0.20
 # A package is marked inactive only after it was missing from this many
@@ -131,7 +134,9 @@ class Store:
             cur.execute(
                 """
                 SELECT id, status, checkpoint_start, started_at,
-                       started_at > now() - %s::interval AS recent
+                       (started_at > now() - %s::interval
+                        AND (started_at AT TIME ZONE 'Asia/Jakarta')::date
+                            = (now() AT TIME ZONE 'Asia/Jakarta')::date) AS recent
                 FROM scrape_runs WHERE tahun_anggaran = %s
                 ORDER BY id DESC LIMIT 1 FOR UPDATE
                 """,

@@ -374,3 +374,19 @@ def test_pemilihan_tahun_parsed_by_database(db, db_url):  # D6
     data[0]["pemilihan"] = "January 2026"  # SIRUP revises the plan: column follows
     run_scrape(settings(db_url), FakeSource(data))
     assert db.execute("SELECT pemilihan_tahun FROM paket WHERE id = 1000").fetchone()[0] == 2026
+
+
+def test_failed_run_from_previous_wib_day_is_not_resumed(db, db_url):  # F-12
+    data = rows(25)
+    with pytest.raises(SirupUnavailableError):
+        run_scrape(settings(db_url), FakeSource(data, fail_on_call=2))
+    # 23:59 WIB yesterday: only minutes old just after midnight, but another day
+    db.execute(
+        "UPDATE scrape_runs SET started_at = "
+        "(date_trunc('day', now() AT TIME ZONE 'Asia/Jakarta') - interval '1 minute') "
+        "AT TIME ZONE 'Asia/Jakarta'"
+    )
+    source = FakeSource(data)
+    run_scrape(settings(db_url), source)
+    assert source.starts == [0, 10, 20]
+    assert [r["status"] for r in runs(db)] == ["failed", "success"]
