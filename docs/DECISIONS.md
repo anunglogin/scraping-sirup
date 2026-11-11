@@ -210,3 +210,20 @@
   `.env` (`INAPROC_X_SECRET`, `INAPROC_REQUEST_TIME`); kalau kosong, header tidak dikirim.
   Batas bawaan per halaman dinaikkan ke 100 (maksimum situs). **Belum selesai:** salinan
   surat izin wajib disimpan di `docs/` sesuai butir 4.
+
+## TD-09 — Hasil pengambil INAPROC disimpan ke tabel `inaproc_rup`
+- **Tanggal:** 11 Nov 2026 · **Status:** Berlaku · Mengubah TD-08 butir 3.
+- **Konteks:** Bos meminta hasil pengambilan data.inaproc.id masuk ke database, bukan
+  hanya ke file.
+- **Keputusan:**
+  1. Tabel baru `inaproc_rup` (migrasi 0006), kunci utama `kode_rup`. Tabel `paket`
+     (sumber SIRUP, dipakai API) tidak diubah dan tidak dicampur.
+  2. Pengambilan ulang memperbarui baris yang sama (upsert), tidak membuat duplikat.
+     Baris lengkap dari sumber disimpan di kolom `raw` (JSONB).
+  3. Pengambil tetap menulis file `output/inaproc/`. Kalau `INAPROC_DATABASE_URL` diisi,
+     tiap halaman juga di-upsert ke database **sebelum** posisi halaman disimpan, jadi
+     kalau database gagal, halaman itu diambil ulang pada jalan berikutnya.
+  4. File yang sudah ada dimasukkan dengan `python -m sirup.inaproc load [FILE]`.
+  5. API belum membaca tabel ini (peran baca-saja API tidak diberi akses).
+- **Rollback:** `alembic downgrade 0005` menghapus tabel `inaproc_rup` saja.
+- **Biaya:** Rp0 (database yang sama).
