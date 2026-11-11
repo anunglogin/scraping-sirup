@@ -177,15 +177,44 @@ def test_old_failed_run_is_not_resumed(db, db_url):
     assert old["status"] == "failed" and new["status"] == "success"
 
 
-def test_missing_package_is_deactivated_and_reactivated(db, db_url):
+def state(db, pid: int) -> tuple[bool, int]:
+    return db.execute("SELECT is_active, missing_runs FROM paket WHERE id = %s", (pid,)).fetchone()
+
+
+def test_missing_package_deactivated_after_two_complete_runs(db, db_url):  # F-05
+    data = rows(25)
+    without = data[:7] + data[8:]
+    run_scrape(settings(db_url), FakeSource(data))
+    run_scrape(settings(db_url), FakeSource(without))
+    assert state(db, 1007) == (True, 1)  # one miss is not enough
+    last = runs(db)[-1]
+    assert (last["rows_missing"], last["rows_deactivated"]) == (1, 0)
+    run_scrape(settings(db_url), FakeSource(without))
+    assert state(db, 1007) == (False, 2)
+    last = runs(db)[-1]
+    assert (last["rows_missing"], last["rows_deactivated"]) == (1, 1)
+    assert count(db, "is_active") == 24
+    run_scrape(settings(db_url), FakeSource(data))  # comes back
+    assert state(db, 1007) == (True, 0)
+    assert count(db, "is_active") == 25
+
+
+def test_misses_must_be_consecutive(db, db_url):
+    data = rows(25)
+    without = data[:7] + data[8:]
+    run_scrape(settings(db_url), FakeSource(data))
+    run_scrape(settings(db_url), FakeSource(without))
+    run_scrape(settings(db_url), FakeSource(data))  # seen again: counter resets
+    run_scrape(settings(db_url), FakeSource(without))
+    assert state(db, 1007) == (True, 1)
+
+
+def test_guarded_run_does_not_count_a_miss(db, db_url):
     data = rows(25)
     run_scrape(settings(db_url), FakeSource(data))
-    run_scrape(settings(db_url), FakeSource(data[:7] + data[8:]))
-    assert db.execute("SELECT is_active FROM paket WHERE id = 1007").fetchone()[0] is False
-    assert count(db, "is_active") == 24
-    assert runs(db)[-1]["rows_deactivated"] == 1
-    run_scrape(settings(db_url), FakeSource(data))
-    assert count(db, "is_active") == 25
+    run_scrape(settings(db_url, scrape_max_pages=1), FakeSource(data[:24]))  # partial
+    assert count(db, "missing_runs > 0") == 0
+    assert runs(db)[-1]["rows_missing"] == 0
 
 
 def test_guard_big_drop_skips_deactivation(db, db_url):

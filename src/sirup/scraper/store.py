@@ -22,6 +22,11 @@ ADVISORY_LOCK_KEY = 7_412_026_001
 RESUME_WINDOW = "24 hours"
 MIN_COMPLETENESS = 0.99
 MAX_TOTAL_DROP = 0.20
+# A package is marked inactive only after it was missing from this many
+# complete runs in a row (review F-05): offset paging over a 45-minute run can
+# skip a few live rows when SIRUP deletes packages mid-run; they come back the
+# next night, so one miss is not enough evidence.
+MISSING_RUNS_TO_DEACTIVATE = 2
 
 # ``raw`` lives in its own table (paket_raw, migration 0003); the rest in paket.
 _PAKET_COLUMNS = [c for c in COPY_COLUMNS if c != "raw"]
@@ -221,6 +226,7 @@ class Store:
                     SELECT {cols} FROM src
                     ON CONFLICT (id) DO UPDATE SET {updates},
                         is_active = true,
+                        missing_runs = 0,
                         last_seen_at = now(),
                         updated_at = CASE WHEN EXCLUDED.id IN (SELECT id FROM changed_raw)
                                           THEN now() ELSE paket.updated_at END
@@ -283,18 +289,24 @@ class Store:
                 valid_received=cur_run["valid"] or 0,
                 previous_total=prev["records_total"] if prev else None,
             )
-            deactivated = 0
+            missing = deactivated = 0
             if note is None:
                 cur.execute(
-                    "UPDATE paket SET is_active = false WHERE tahun_anggaran = %s "
-                    "AND is_active AND last_seen_at < %s",
+                    "UPDATE paket SET missing_runs = missing_runs + 1 "
+                    "WHERE tahun_anggaran = %s AND is_active AND last_seen_at < %s",
                     (run.tahun_anggaran, run.started_at),
+                )
+                missing = cur.rowcount
+                cur.execute(
+                    "UPDATE paket SET is_active = false WHERE tahun_anggaran = %s "
+                    "AND is_active AND last_seen_at < %s AND missing_runs >= %s",
+                    (run.tahun_anggaran, run.started_at, MISSING_RUNS_TO_DEACTIVATE),
                 )
                 deactivated = cur.rowcount
             cur.execute(
                 "UPDATE scrape_runs SET status = 'success', finished_at = now(), "
-                "rows_deactivated = %s, note = %s WHERE id = %s",
-                (deactivated, note, run.id),
+                "rows_missing = %s, rows_deactivated = %s, note = %s WHERE id = %s",
+                (missing, deactivated, note, run.id),
             )
         if note:
             log.warning("run %s: %s", run.id, note)

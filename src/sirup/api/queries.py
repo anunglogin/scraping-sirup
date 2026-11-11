@@ -115,6 +115,7 @@ DETAIL_QUERY = sql.SQL(
 
 RUNS_QUERY = sql.SQL(
     "SELECT id, tahun_anggaran, status, started_at, finished_at, records_total, rows_received, "
-    "rows_inserted, rows_updated, rows_invalid, rows_deactivated, checkpoint_start, error, note "
+    "rows_inserted, rows_updated, rows_invalid, rows_missing, rows_deactivated, "
+    "checkpoint_start, error, note "
     "FROM scrape_runs ORDER BY id DESC LIMIT %s"
 )

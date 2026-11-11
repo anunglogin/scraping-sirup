@@ -130,6 +130,7 @@ class ScrapeRun(BaseModel):
                 "rows_inserted": 1520,
                 "rows_updated": 8311,
                 "rows_invalid": 0,
+                "rows_missing": 120,
                 "rows_deactivated": 97,
                 "checkpoint_start": 3638893,
                 "error": None,
@@ -148,7 +149,12 @@ class ScrapeRun(BaseModel):
     rows_inserted: int = Field(description="Paket baru yang masuk database.")
     rows_updated: int = Field(description="Paket lama yang isinya berubah.")
     rows_invalid: int = Field(description="Baris rusak yang dilewati.")
-    rows_deactivated: int = Field(description="Paket yang ditandai hilang dari SIRUP.")
+    rows_missing: int = Field(
+        description="Paket aktif yang tidak terlihat di run ini (belum tentu dinonaktifkan)."
+    )
+    rows_deactivated: int = Field(
+        description="Paket yang ditandai hilang: tidak terlihat di 2 run lengkap berturut-turut."
+    )
     checkpoint_start: int = Field(description="Posisi terakhir yang tersimpan (untuk lanjut).")
     error: str | None = Field(description="Pesan error bila gagal.")
     note: str | None = Field(
