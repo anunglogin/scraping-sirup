@@ -222,6 +222,31 @@ Bisa dilihat juga lewat `GET /v1/scrape-runs`.
 
 ---
 
+## Sumber lain: data.inaproc.id (tidak dipakai)
+
+Dashboard [data.inaproc.id/rup](https://data.inaproc.id/rup) menampilkan data RUP yang
+sama dengan SIRUP. Endpoint di baliknya (`/dashboard-api/rup/table`) **tidak diambil**
+oleh proyek ini:
+
+- Permintaan dari program dibalas **HTTP 403** (dicek 11 Nov 2026). Situs memasang
+  perlindungan anti-bot Cloudflare (cookie `__cf_bm`) dan kode `x-secret` yang dibuat di
+  browser. Keduanya sengaja dipasang untuk menolak akses otomatis.
+- Menembus perlindungan itu, misalnya dengan menyalin cookie dari browser atau
+  meniru `x-secret`, sama dengan mengakali pengamanan pemilik situs. Kami tidak
+  melakukannya karena berisiko secara hukum, dan caranya juga mudah rusak karena
+  cookie cepat kedaluwarsa.
+- Tidak ada yang hilang: data RUP-nya sudah diambil lengkap dari endpoint SIRUP publik.
+
+**Jalur resmi bila data dari INAPROC tetap dibutuhkan** (misalnya ada kolom yang tidak
+tersedia di SIRUP):
+1. Tanyakan ketersediaan akses API atau data lewat
+   [Pusat Bantuan INAPROC](https://bantuan.inaproc.id) atau langsung ke LKPP. Saat
+   ini belum ditemukan API publik maupun prosedur permohonan API yang resmi.
+2. Ajukan **permohonan informasi publik** ke PPID LKPP (berdasarkan UU Keterbukaan
+   Informasi Publik). Prosesnya resmi dan gratis, tetapi tidak selalu dikabulkan.
+
+---
+
 ## Struktur folder
 
 ```
