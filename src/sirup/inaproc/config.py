@@ -31,6 +31,8 @@ class InaprocSettings(BaseSettings):
     user_agent: str = DEFAULT_USER_AGENT
     timeout_seconds: float = Field(default=30.0, gt=0)
     retry_attempts: int = Field(default=3, ge=1, le=10)
+    # Write access to PostgreSQL; blank = write files only (no database).
+    database_url: SecretStr | None = None
     # Access pair granted in writing by INAPROC/LKPP (see TD-08). Keep in .env only.
     x_secret: SecretStr | None = None
     request_time: str | None = Field(default=None, pattern=r"^\d{10,16}$")

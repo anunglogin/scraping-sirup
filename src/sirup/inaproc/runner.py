@@ -4,6 +4,9 @@ Output in ``output_dir``:
 - ``rup_<year>.jsonl``  one row per line, appended
 - ``rup_<year>.csv``    same rows, the fixed columns below
 - ``state_<year>.json`` cursor of the next page, so a rerun continues
+
+With a ``store`` the same rows are also upserted into table inaproc_rup, before
+the cursor is saved, so a crash never skips rows in the database.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ from pathlib import Path
 
 from sirup.inaproc.client import InaprocClient
 from sirup.inaproc.config import InaprocSettings
+from sirup.inaproc.store import InaprocStore
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +46,7 @@ CSV_COLUMNS = (
 class RunResult:
     pages: int = 0
     rows: int = 0
+    db_rows: int = 0
     finished: bool = False
     total_rows: int | None = None
 
@@ -71,6 +76,7 @@ def run_collect(
     client: InaprocClient,
     *,
     sleep: Callable[[float], None] = time.sleep,
+    store: InaprocStore | None = None,
 ) -> RunResult:
     year = settings.resolved_year()
     out = settings.output_dir
@@ -100,6 +106,8 @@ def run_collect(
                 writer.writerow({k: _safe_csv(data.get(k)) for k in CSV_COLUMNS})
             jf.flush()
             cf.flush()
+            if store is not None:
+                result.db_rows += store.upsert(page.rows)
             result.pages += 1
             result.rows += len(page.rows)
             result.total_rows = page.total_rows

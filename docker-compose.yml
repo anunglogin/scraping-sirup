@@ -191,8 +191,12 @@ services:
       INAPROC_DELAY_SECONDS: ${INAPROC_DELAY_SECONDS:-2}
       INAPROC_X_SECRET: ${INAPROC_X_SECRET:-}
       INAPROC_REQUEST_TIME: ${INAPROC_REQUEST_TIME:-}
+      INAPROC_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
     volumes:
       - ./output/inaproc:/app/output/inaproc
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
 
 networks:
   default:

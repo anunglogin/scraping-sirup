@@ -158,3 +158,41 @@ def test_secret_is_read_from_env_and_hidden(monkeypatch):
     settings = InaprocSettings()
     assert settings.x_secret.get_secret_value() == "dGVzdA=="
     assert "dGVzdA==" not in repr(settings)
+
+
+class FakeStore:
+    def __init__(self, fail: bool = False) -> None:
+        self.rows: list[str] = []
+        self.fail = fail
+
+    def upsert(self, rows):
+        if self.fail:
+            raise RuntimeError("db down")
+        self.rows += [r.kode_rup for r in rows]
+        return len(rows)
+
+
+@respx.mock
+def test_run_also_upserts_each_page_into_store(tmp_path):
+    respx.get(DEFAULT_TABLE_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=body([ROW_A], cursor="C1", has_more=True)),
+            httpx.Response(200, json=body([ROW_B], cursor="", has_more=False)),
+        ]
+    )
+    settings = InaprocSettings(tahun=2026, max_pages=0, output_dir=tmp_path)
+    store = FakeStore()
+    result = run_collect(settings, make_client(), sleep=lambda _: None, store=store)
+    assert store.rows == ["68336359", "42390663"]
+    assert result.db_rows == 2
+
+
+@respx.mock
+def test_db_failure_does_not_advance_cursor(tmp_path):
+    respx.get(DEFAULT_TABLE_URL).mock(
+        return_value=httpx.Response(200, json=body([ROW_A], cursor="C1", has_more=True))
+    )
+    settings = InaprocSettings(tahun=2026, max_pages=1, output_dir=tmp_path)
+    with pytest.raises(RuntimeError):
+        run_collect(settings, make_client(), sleep=lambda _: None, store=FakeStore(fail=True))
+    assert not (tmp_path / "state_2026.json").exists()

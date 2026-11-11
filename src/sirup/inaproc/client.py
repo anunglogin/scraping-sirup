@@ -1,9 +1,12 @@
-"""INAPROC RUP API collector. Run: python client_inaproc_complete.py --year 2026 --limit 100 --max-pages 2
+"""INAPROC RUP API client.
+
+Standalone run: python -m sirup.inaproc.client --year 2026 --limit 100 --max-pages 2
 
 Dependencies: pip install httpx pydantic tenacity
 The x-secret / x-request-time pair is only sent when INAPROC_X_SECRET and
 INAPROC_REQUEST_TIME are set in the environment (.env). Never hard-code them here.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -81,7 +84,7 @@ class InaprocClient:
         table_url: str = DEFAULT_TABLE_URL,
         cursor_param: str = "cursor",
         time_header: str = "x-request-time",
-        secret_header: str = "x-secret",
+        secret_header: str = "x-secret",  # noqa: S107 - header name, not a value
         x_secret: str | None = None,
         user_agent: str = DEFAULT_USER_AGENT,
         timeout_seconds: float = 30.0,
@@ -145,7 +148,9 @@ class InaprocClient:
             raise InaprocUnavailableError(f"network error: {exc}") from exc
 
         if resp.status_code in (401, 403):
-            raise InaprocRefusedError(f"Access refused (HTTP {resp.status_code}): {resp.text[:120]}")
+            raise InaprocRefusedError(
+                f"Access refused (HTTP {resp.status_code}): {resp.text[:120]}"
+            )
         if resp.status_code == 429 or resp.status_code >= 500:
             raise InaprocUnavailableError(f"HTTP {resp.status_code}")
         if resp.status_code != 200:
@@ -158,7 +163,9 @@ class InaprocClient:
             raise InaprocFormatError(f"unexpected JSON shape: {exc.error_count()} errors") from exc
 
 
-def collect(client: InaprocClient, year: int, limit: int, max_pages: int, delay: float) -> list[dict]:
+def collect(
+    client: InaprocClient, year: int, limit: int, max_pages: int, delay: float
+) -> list[dict]:
     records: list[dict] = []
     seen_ids: set[str] = set()
     seen_cursors: set[str] = set()
@@ -201,8 +208,12 @@ def save(records: list[dict], output: Path, year: int) -> None:
         writer = csv.DictWriter(stream, fieldnames=columns)
         writer.writeheader()
         for row in records:
-            writer.writerow({k: json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v
-                             for k, v in row.items()})
+            writer.writerow(
+                {
+                    k: json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v
+                    for k, v in row.items()
+                }
+            )
     print(f"Saved {csv_path}")
 
 
@@ -210,7 +221,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Collect authorized INAPROC RUP table pages")
     parser.add_argument("--year", type=int, default=2026)
     parser.add_argument("--limit", type=int, default=100)
-    parser.add_argument("--max-pages", type=int, default=2, help="Max pages; increase after testing")
+    parser.add_argument("--max-pages", type=int, default=2, help="Max pages to fetch")
     parser.add_argument("--delay", type=float, default=1.5)
     parser.add_argument("--output", type=Path, default=Path("output"))
     args = parser.parse_args()
