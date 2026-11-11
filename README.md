@@ -45,6 +45,9 @@ tender berdasarkan nama paket, bulan pemilihan, pagu, dan satuan kerja.
    ditandai `is_active = false`, bukan dihapus. Ini hanya dilakukan kalau putarannya
    lengkap (≥ 99%) dan jumlah total tidak anjlok lebih dari 20%.
 6. **Sajikan.** API membaca database dengan akun yang **hanya bisa membaca**.
+7. **Sumber kedua (manual).** Pengambil INAPROC bisa menambahkan paket dari
+   data.inaproc.id ke tabel yang sama, dengan penanda `sumber`. Lihat
+   [Sumber kedua: data.inaproc.id](#sumber-kedua-datainaprocid-pengambil-inaproc).
 
 Alasan di balik setiap keputusan teknis ada di [docs/DECISIONS.md](docs/DECISIONS.md).
 
@@ -172,7 +175,7 @@ Balasan (format DataTables):
 }
 ```
 
-### Tabel `paket` (satu baris = satu paket SIRUP)
+### Tabel `paket` (satu baris = satu paket, dari SIRUP dan/atau INAPROC)
 
 | Kolom DB | Field SIRUP | Tipe | Arti |
 |---|---|---|---|
@@ -194,12 +197,14 @@ Balasan (format DataTables):
 | `pds` | `pds` | boolean | Penanda dari SIRUP |
 | `id_referensi` | `id_referensi` | integer | Referensi internal SIRUP |
 | `is_active` | — | boolean | `false` = sudah tidak muncul di SIRUP |
+| `sumber` | — | text[] | Sumber yang mencantumkan paket: `{sirup}`, `{inaproc}`, atau keduanya (TD-10) |
 | `first_seen_at` | — | timestamptz | Pertama kali terlihat (untuk mencari "paket baru") |
 | `last_seen_at` | — | timestamptz | Terakhir terlihat di SIRUP |
 | `updated_at` | — | timestamptz | Terakhir isinya berubah |
 
 Indeks: trigram (`pg_trgm`) pada `nama_paket` dan `satuan_kerja` untuk pencarian kata,
-`(tahun_anggaran, pemilihan_tahun, id_bulan)`, `(tahun_anggaran, pagu, id)`, dan `(first_seen_at, id)`.
+`(tahun_anggaran, pemilihan_tahun, id_bulan)`, `(tahun_anggaran, pagu, id)`, `(first_seen_at, id)`,
+dan GIN pada `sumber`.
 
 ### Tabel `paket_raw`
 
@@ -222,65 +227,181 @@ Bisa dilihat juga lewat `GET /v1/scrape-runs`.
 
 ---
 
-## Sumber lain: data.inaproc.id (pengambil opsional)
+## Sumber kedua: data.inaproc.id (pengambil INAPROC)
 
 Dashboard [data.inaproc.id/rup](https://data.inaproc.id/rup) menampilkan data RUP yang
-sama dengan SIRUP. Endpoint di baliknya adalah `/dashboard-api/rup/table`. Ada pengambil
-opsional untuk endpoint itu (`src/sirup/inaproc`). Pengambil ini **tidak terjadwal** dan
-tidak ikut menyala saat `docker compose up`.
+mirip dengan SIRUP, lewat endpoint `/dashboard-api/rup/table`. Pengambil INAPROC
+(`src/sirup/inaproc`) mengambil data dari endpoint itu, menyimpannya ke file dan
+database, lalu menggabungkannya ke tabel `paket` sehingga bisa dicari lewat API yang sama.
 
-```bash
-docker compose --profile inaproc run --rm inaproc
+Pengambil ini **tidak terjadwal** dan tidak ikut menyala saat `docker compose up`.
+Ia hanya jalan kalau dijalankan dengan tangan.
+
+> **Izin akses.** Situs ini meminta header `x-secret` + `x-request-time`. Bos menyatakan
+> ada **izin tertulis** dari INAPROC/LKPP untuk memakainya (TD-08). Salinan surat izin
+> **wajib** disimpan di `docs/` sebelum pengambil dijalankan di server produksi.
+> Tanpa nilai header itu, situs menjawab `403 Forbidden` dan pengambil berhenti.
+
+### Cara kerja
+
+```
+ ┌──────────────────┐  GET ?tahun=&limit=100&cursor=   ┌──────────────────┐
+ │ data.inaproc.id  │ ◄─────────────────────────────── │ pengambil        │
+ │ /dashboard-api/  │ ───────────────────────────────► │ INAPROC (manual) │
+ │ rup/table        │  100 baris + cursor berikutnya   └───┬──────────┬───┘
+ └──────────────────┘                                      │          │
+                                    tulis file (tambah)    │          │ upsert per halaman
+                                                           ▼          ▼
+                            output/inaproc/          PostgreSQL: inaproc_rup
+                            rup_<tahun>.jsonl                  │ gabung
+                            rup_<tahun>.csv                    ▼
+                            state_<tahun>.json        tabel paket (kolom sumber)
+                                                               │
+                                                               ▼
+                                              API /v1/paket?sumber=inaproc
 ```
 
-- Yang dikirim: `tahun`, `limit`, `cursor` (halaman berikutnya), dan header
-  `x-request-time` (waktu sekarang dalam milidetik). Tidak ada `x-secret`, cookie browser,
-  atau trik anti-bot.
-- Hasil ada di `output/inaproc/`: `rup_<tahun>.jsonl`, `rup_<tahun>.csv` (bisa dibuka di
-  Excel), dan `state_<tahun>.json` (posisi halaman berikutnya). Kalau dijalankan lagi,
-  pengambil melanjutkan dari posisi terakhir.
-- Pengaturan ada di `.env`: `INAPROC_TAHUN`, `INAPROC_LIMIT`, `INAPROC_MAX_PAGES`
-  (bawaan 10 halaman, 0 = sampai habis; `INAPROC_LIMIT` bawaan 100 baris per halaman, maksimum situs), dan `INAPROC_DELAY_SECONDS` (jeda antarhalaman,
-  bawaan 2 detik).
-- Hasil juga masuk ke tabel database `inaproc_rup` (TD-09) dan digabung ke `paket`
-  dengan kolom `sumber` (TD-10), sehingga bisa dicari lewat `/v1/paket?sumber=inaproc`. Untuk memasukkan
-  file yang sudah ada: `docker compose --profile inaproc run --rm inaproc python -m sirup.inaproc load`.
-- Kode keluar: 0 = selesai, 1 = error, 2 = **situs menolak (401/403)**. Kalau ditolak,
-  pengambil langsung berhenti tanpa mencoba ulang.
+1. **Ambil per halaman.** Satu permintaan berisi 100 baris (batas maksimum situs). Data
+   2026 ada ±4,77 juta baris, jadi ±47.690 halaman. Antarhalaman ada jeda 2 detik.
+2. **Periksa.** Setiap baris dicek bentuknya (`kode_rup`, `tahun_anggaran`, nama, nilai,
+   dan seterusnya). Kolom tambahan dari situs tetap disimpan di data asli (`raw`).
+3. **Tulis ke file.** Baris ditambahkan ke `rup_<tahun>.jsonl` dan `rup_<tahun>.csv`.
+   Isi CSV yang diawali `=`, `+`, `-`, atau `@` diberi tanda kutip supaya aman dibuka
+   di Excel.
+4. **Simpan ke database.** Kalau `INAPROC_DATABASE_URL` diisi, setiap halaman disimpan
+   ke tabel `inaproc_rup` dan digabung ke `paket` dalam satu transaksi.
+5. **Simpan posisi.** Setelah halaman tersimpan, posisi halaman berikutnya (`cursor`)
+   ditulis ke `state_<tahun>.json`. Urutannya sengaja begini: kalau database gagal,
+   posisi tidak maju, jadi halaman itu diambil lagi pada jalan berikutnya. Tidak ada
+   baris yang terlewat, dan tidak ada yang dobel di database.
+6. **Lanjutkan kalau putus.** Menjalankan ulang pengambil akan melanjutkan dari posisi
+   terakhir, bukan dari nol. Setelah semua halaman habis, `finished` bernilai `true`.
 
-> **Status per 11 Nov 2026:** situs menolak permintaan seperti ini dengan
-> `403 {"error":"Forbidden."}`. Pengambil baru menghasilkan data kalau INAPROC membuka
-> akses atau memberi akses resmi (lihat di bawah).
+### Aturan penggabungan ke tabel `paket` (TD-10)
 
-### Kenapa pengaman situs tidak ditembus
+Satu kode RUP = satu baris di `paket`. Kolom `sumber` mencatat siapa yang
+mencantumkannya.
 
-- Permintaan dari program dibalas **HTTP 403** (dicek 11 Nov 2026). Situs memasang
-  perlindungan anti-bot Cloudflare (cookie `__cf_bm`) dan kode `x-secret` yang dibuat di
-  browser. Keduanya sengaja dipasang untuk menolak akses otomatis.
-- Menembus perlindungan itu, misalnya dengan menyalin cookie dari browser atau
-  meniru `x-secret`, sama dengan mengakali pengamanan pemilik situs. Kami tidak
-  melakukannya karena berisiko secara hukum, dan caranya juga mudah rusak karena
-  cookie cepat kedaluwarsa.
-- Tidak ada yang hilang: data RUP-nya sudah diambil lengkap dari endpoint SIRUP publik.
+| Kondisi | Yang terjadi | `sumber` |
+|---|---|---|
+| Paket sudah ada dari SIRUP | Isi **tetap dari SIRUP**; hanya tanda sumber yang ditambah | `{sirup,inaproc}` |
+| Paket tidak ada di SIRUP | Ditambahkan sebagai baris baru dari data INAPROC | `{inaproc}` |
+| Paket `{inaproc}` diambil ulang dan isinya berubah | Isinya diperbarui | `{inaproc}` |
+| Paket `{inaproc}` kemudian muncul di SIRUP | Isinya diganti data SIRUP | `{inaproc,sirup}` |
 
-**Jalur resmi bila data dari INAPROC tetap dibutuhkan** (misalnya ada kolom yang tidak
-tersedia di SIRUP):
-1. Tanyakan ketersediaan akses API atau data lewat
-   [Pusat Bantuan INAPROC](https://bantuan.inaproc.id) atau langsung ke LKPP. Saat
-   ini belum ditemukan API publik maupun prosedur permohonan API yang resmi.
-2. Ajukan **permohonan informasi publik** ke PPID LKPP (berdasarkan UU Keterbukaan
-   Informasi Publik). Prosesnya resmi dan gratis, tetapi tidak selalu dikabulkan.
+Pemetaan kolom untuk paket yang hanya ada di INAPROC:
+
+| Kolom `paket` | Dari INAPROC | Catatan |
+|---|---|---|
+| `id` | `kode_rup` | |
+| `nama_paket` | `nama_paket` | |
+| `pagu` | `total_nilai` | dibulatkan ke rupiah; kosong menjadi 0 |
+| `jenis_pengadaan` / `metode` | `jenis_pengadaan` / `metode_pengadaan` | `-` disimpan kosong |
+| `kldi` / `satuan_kerja` | `nama_instansi` / `nama_satker` | |
+| `sumber_dana` | `sumber_dana` | `-` disimpan kosong |
+| `is_pdn` / `is_umk` | `produk_dalam_negeri` / `status_umk` | `Ya` = true, `Tidak` = false |
+| `id_bulan`, `pemilihan`, `lokasi`, `id_satker`, kode-kode lain | — | tidak tersedia di INAPROC, jadi kosong |
+
+Akibatnya:
+- Paket yang hanya ada di INAPROC **tidak muncul** kalau filter `pemilihan` dipakai,
+  karena tidak punya bulan pemilihan.
+- Scraper SIRUP **tidak pernah menonaktifkan** paket yang hanya ada di INAPROC. Kalau
+  INAPROC menghapus sebuah paket, paket itu tetap tampil aktif di sini (catatan review S2).
+
+### Menjalankan
+
+Isi dulu `.env` (lihat `.env.example`):
+
+| Variabel | Bawaan | Arti |
+|---|---|---|
+| `INAPROC_X_SECRET` | kosong | Nilai header `x-secret` dari izin INAPROC. **Rahasia, jangan di-commit** |
+| `INAPROC_REQUEST_TIME` | kosong | Nilai header `x-request-time` yang berpasangan dengan `x-secret` |
+| `INAPROC_TAHUN` | tahun berjalan | Tahun anggaran yang diambil |
+| `INAPROC_LIMIT` | 100 | Baris per halaman (1–100) |
+| `INAPROC_MAX_PAGES` | 10 | Halaman per jalan; `0` = sampai habis |
+| `INAPROC_DELAY_SECONDS` | 2 | Jeda antarhalaman (minimal 0,5 detik) |
+
+`INAPROC_DATABASE_URL` diisi otomatis oleh `docker-compose.yml` (database yang sama
+dengan scraper). Kalau dikosongkan, hasilnya hanya ditulis ke file.
+
+```bash
+# Ambil sesuai INAPROC_MAX_PAGES (bawaan 10 halaman = 1.000 baris)
+docker compose --profile inaproc run --rm inaproc
+
+# Ambil 1.000 halaman (±100 ribu baris, ±40 menit)
+docker compose --profile inaproc run --rm -e INAPROC_MAX_PAGES=1000 inaproc
+
+# Masukkan file JSONL yang sudah ada ke database (tanpa mengambil dari situs)
+docker compose --profile inaproc run --rm inaproc python -m sirup.inaproc load
+
+# Mulai dari halaman pertama lagi: hapus file posisi
+rm output/inaproc/state_2026.json
+```
+
+Perkiraan waktu: ±2,2 detik per halaman. Semua data 2026 (±47.690 halaman) butuh
+sekitar **29 jam**. Pengambil boleh dihentikan kapan saja (Ctrl+C) dan dilanjutkan nanti.
+
+Kode keluar:
+
+| Kode | Arti | Yang perlu dilakukan |
+|---|---|---|
+| 0 | Selesai (batas halaman tercapai atau data habis) | — |
+| 1 | Error (jaringan, format jawaban berubah, database) | Lihat log; jalankan ulang, posisi tetap aman |
+| 2 | **Situs menolak (401/403)** | Periksa `INAPROC_X_SECRET` dan `INAPROC_REQUEST_TIME`; pengambil tidak mencoba ulang |
+
+Jawaban 429 (terlalu sering) dan 5xx dicoba ulang otomatis (maksimal 3 kali, dengan
+jeda yang makin lama).
+
+### Melihat hasilnya
+
+```bash
+# Lewat API: hanya paket yang dicantumkan INAPROC
+curl -H "X-API-Key: <kunci>" "http://127.0.0.1:8000/v1/paket?sumber=inaproc&size=5"
+```
+
+```sql
+-- Jumlah paket per sumber
+SELECT sumber, count(*) FROM paket GROUP BY 1;
+-- Data INAPROC apa adanya
+SELECT kode_rup, nama_paket, nama_instansi, total_nilai FROM inaproc_rup LIMIT 10;
+```
+
+File CSV di `output/inaproc/rup_<tahun>.csv` bisa langsung dibuka di Excel.
+
+### Tabel `inaproc_rup`
+
+Salinan lengkap data INAPROC (migrasi 0006, TD-09), terpisah dari `paket`.
+
+| Kolom | Tipe | Arti |
+|---|---|---|
+| `kode_rup` | bigint, PK | Kode RUP (sama dengan `paket.id`) |
+| `tahun_anggaran` | smallint | Tahun anggaran |
+| `nama_paket`, `nama_instansi`, `nama_satker` | text | Nama paket, instansi, satuan kerja |
+| `total_nilai` | numeric(20,2) | Nilai paket dalam rupiah |
+| `cara_pengadaan`, `cara_pengadaan_label` | text | Penyedia / Swakelola |
+| `jenis_pengadaan`, `metode_pengadaan` | text | `-` = tidak berlaku |
+| `sumber_dana`, `produk_dalam_negeri`, `status_umk` | text | Teks asli dari INAPROC (`Ya`/`Tidak`) |
+| `raw` | jsonb | Baris asli lengkap dari INAPROC |
+| `first_seen_at` / `last_seen_at` | timestamptz | Pertama / terakhir kali diambil |
+
+### Rollback
+
+- `alembic downgrade 0006`: menghapus kolom `paket.sumber` **dan** paket yang hanya
+  dari INAPROC. Data INAPROC tetap aman di `inaproc_rup`.
+- `alembic downgrade 0005`: menghapus juga tabel `inaproc_rup`. File di
+  `output/inaproc/` tidak tersentuh, jadi bisa dimuat ulang dengan perintah `load`.
 
 ---
 
 ## Struktur folder
 
 ```
-├─ docker-compose.yml      db, migrate, scraper, api, backup
+├─ docker-compose.yml      db, migrate, scraper, api, backup, inaproc (manual)
 ├─ Dockerfile              satu image untuk scraper, api, dan migrate
 ├─ .env.example            contoh konfigurasi (tanpa rahasia)
 ├─ src/sirup/
 │  ├─ scraper/             client (HTTP + retry), models (validasi), store (DB), runner, __main__
+│  ├─ inaproc/             pengambil data.inaproc.id: client, config, runner, store (DB), __main__
 │  └─ api/                 main (FastAPI + Swagger), queries, schemas, config
 ├─ db/
 │  ├─ init/                pembuatan akun database baca-saja untuk API
