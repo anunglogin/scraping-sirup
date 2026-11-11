@@ -79,3 +79,16 @@ def test_api_keys_must_be_long():
         ApiSettings(database_url="postgresql://x@y/z", api_keys=" , ")
     s = ApiSettings(database_url="postgresql://x@y/z", api_keys=f" {'a' * 24} , {'b' * 30} ")
     assert s.key_list() == ["a" * 24, "b" * 30]
+
+
+def test_config_errors_do_not_echo_secrets(monkeypatch):
+    secret = "FAKEKEY-short-123,another-fake-key-also"
+    with pytest.raises(ValidationError) as exc:
+        ApiSettings(database_url="postgresql://u:topsecretpw@h/db", api_keys=secret)
+    text = str(exc.value)
+    assert "FAKEKEY" not in text and "another-fake" not in text
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:topsecretpw@h/db")
+    monkeypatch.setenv("SCRAPE_PAGE_SIZE", "99999")
+    with pytest.raises(ValidationError) as exc2:
+        ScraperSettings()
+    assert "topsecretpw" not in str(exc2.value) and "99999" not in str(exc2.value)

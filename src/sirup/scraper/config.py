@@ -14,7 +14,9 @@ DEFAULT_USER_AGENT = "Mozilla/5.0 (compatible; sirup-collector/0.1)"
 class ScraperSettings(BaseSettings):
     # Blank strings in the environment count as "not set" so that e.g.
     # ``TAHUN_ANGGARAN=`` falls back to the default (None = current year).
-    model_config = SettingsConfigDict(env_ignore_empty=True, extra="ignore")
+    model_config = SettingsConfigDict(
+        env_ignore_empty=True, extra="ignore", hide_input_in_errors=True
+    )
 
     database_url: str = Field(description="postgresql:// URL with write access")
     tahun_anggaran: int | None = Field(default=None, ge=2000, le=2100)

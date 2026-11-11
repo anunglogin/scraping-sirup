@@ -97,6 +97,10 @@ services:
       # Read-only role created by db/init/10-api-role.sh
       DATABASE_URL: postgresql://${API_DB_USER}:${API_DB_PASSWORD}@db:5432/${POSTGRES_DB}
       API_KEYS: ${API_KEYS:?set API_KEYS in .env}
+      DB_STATEMENT_TIMEOUT_MS: ${DB_STATEMENT_TIMEOUT_MS:-3000}
+      DB_POOL_MIN_SIZE: ${DB_POOL_MIN_SIZE:-1}
+      DB_POOL_MAX_SIZE: ${DB_POOL_MAX_SIZE:-10}
+      SEARCH_MAX_CONCURRENT: ${SEARCH_MAX_CONCURRENT:-}
     ports:
       - "${API_BIND:-127.0.0.1}:${API_PORT:-8000}:8000"
     healthcheck:

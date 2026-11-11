@@ -6,7 +6,9 @@ Run with: ``uvicorn sirup.api.main:create_app --factory``
 from __future__ import annotations
 
 import logging
+import re
 import secrets
+import threading
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
@@ -18,7 +20,7 @@ from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool, PoolTimeout
-from pydantic import Field, StringConstraints
+from pydantic import AfterValidator, Field, StringConstraints
 
 from sirup import __version__
 from sirup.api.config import ApiSettings
@@ -54,12 +56,14 @@ dari [SIRUP](https://sirup.inaproc.id).
 | `pemilihan_bulan` | Bulan pemilihan penyedia (1–12), boleh lebih dari satu |
 | `pagu_min` / `pagu_max` | Rentang nilai pagu dalam rupiah |
 
-Semua kata kunci **tidak peka huruf besar/kecil**. Tanda `%` dan `_` dicari apa adanya.
+Semua kata kunci **tidak peka huruf besar/kecil** dan harus memuat minimal **3 huruf/angka
+berurutan** (mis. `laptop`, `100%`). Tanda `%` dan `_` dicari apa adanya.
 
 ### Kode error
 - **401** kunci API tidak ada atau salah
 - **404** paket tidak ditemukan
 - **422** isian filter tidak valid (pesannya menjelaskan kolom mana)
+- **429** terlalu banyak pencarian bersamaan; coba lagi sesuai header `Retry-After`
 - **503** database sedang tidak bisa dihubungi
 """
 
@@ -79,9 +83,39 @@ api_key_header = APIKeyHeader(
 ERR_401 = {"model": ErrorMessage, "description": "Kunci API tidak ada atau salah."}
 ERR_404 = {"model": ErrorMessage, "description": "Paket tidak ditemukan."}
 ERR_422 = {"description": "Isian tidak valid. `detail` berisi daftar kolom yang salah."}
-ERR_503 = {"model": ErrorMessage, "description": "Database sedang tidak bisa dihubungi."}
+ERR_429 = {
+    "model": ErrorMessage,
+    "description": "Terlalu banyak pencarian bersamaan. Coba lagi setelah beberapa detik "
+    "(lihat header `Retry-After`).",
+}
+ERR_503 = {
+    "model": ErrorMessage,
+    "description": "Database sedang tidak bisa dihubungi, sedang sibuk, "
+    "atau pencarian terlalu lama.",
+}
 
-SearchText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=100)]
+RETRY_AFTER_SECONDS = 2
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+# pg_trgm can only use its index when the keyword has >= 3 consecutive letters
+# or digits; without that every row is a candidate and the query times out.
+_TRIGRAM_RUN = re.compile(r"[^\W_]{3}")
+
+
+def _check_search_text(value: str) -> str:
+    if _CONTROL_CHARS.search(value):
+        raise ValueError("Kata kunci tidak boleh berisi karakter kontrol.")
+    if not _TRIGRAM_RUN.search(value):
+        raise ValueError(
+            "Kata kunci harus mengandung minimal 3 huruf/angka berurutan, mis. 'laptop'."
+        )
+    return value
+
+
+SearchText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=3, max_length=100),
+    AfterValidator(_check_search_text),
+]
 
 
 def require_api_key(
@@ -111,6 +145,25 @@ def get_conn(request: Request) -> Iterator[psycopg.Connection]:
 Conn = Annotated[psycopg.Connection, Depends(get_conn)]
 
 
+def limit_search(request: Request) -> Iterator[None]:
+    """Cap concurrent searches below the pool size (review F-01).
+
+    Without it, a handful of slow searches holds every pool connection and even
+    /health fails. Extra searches wait briefly, then get 429 + Retry-After.
+    """
+    slots: threading.BoundedSemaphore = request.app.state.search_slots
+    if not slots.acquire(timeout=request.app.state.search_queue_wait):
+        raise HTTPException(
+            status_code=429,
+            detail="Terlalu banyak pencarian bersamaan. Coba lagi beberapa detik lagi.",
+            headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
+        )
+    try:
+        yield
+    finally:
+        slots.release()
+
+
 def _validation_error(field: str, message: str, value: Any) -> RequestValidationError:
     return RequestValidationError(
         [{"type": "value_error", "loc": ("query", field), "msg": message, "input": value}]
@@ -132,14 +185,16 @@ router = APIRouter(
     "**DAN**. Hasil dibagi per halaman; maksimal 10.000 hasil pertama bisa dibuka "
     "(page × size ≤ 10.000) — persempit filter bila perlu lebih.",
     response_model=PaketPage,
-    responses={422: ERR_422},
+    responses={422: ERR_422, 429: ERR_429},
+    dependencies=[Depends(limit_search)],
 )
 def search_paket(
     conn: Conn,
     paket: Annotated[
         SearchText | None,
         Query(
-            description="Kata kunci **nama paket** (3–100 karakter). Cocok bila nama paket "
+            description="Kata kunci **nama paket** (3–100 karakter, minimal 3 huruf/angka "
+            "berurutan). Cocok bila nama paket "
             "mengandung kata ini, tidak peka huruf besar/kecil.",
             examples=["laptop"],
         ),
@@ -147,7 +202,8 @@ def search_paket(
     satuan_kerja: Annotated[
         SearchText | None,
         Query(
-            description="Kata kunci **nama satuan kerja** (3–100 karakter), tidak peka huruf "
+            description="Kata kunci **nama satuan kerja** (3–100 karakter, minimal 3 huruf/angka "
+            "berurutan), tidak peka huruf "
             "besar/kecil.",
             examples=["puskesmas"],
         ),
@@ -337,6 +393,8 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.api_keys = [k.encode("utf-8") for k in settings.key_list()]
+    app.state.search_slots = threading.BoundedSemaphore(settings.search_slots())
+    app.state.search_queue_wait = settings.search_queue_wait_seconds
     app.include_router(router)
     app.add_api_route(
         "/health",
@@ -350,6 +408,15 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     )
 
     @app.exception_handler(PoolTimeout)
+    async def _pool_busy(_: Request, exc: Exception) -> JSONResponse:
+        # The database is fine; every pooled connection is just in use.
+        log.warning("connection pool exhausted")
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Server sedang sibuk. Coba lagi beberapa detik lagi."},
+            headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
+        )
+
     @app.exception_handler(psycopg.OperationalError)
     async def _db_unavailable(_: Request, exc: Exception) -> JSONResponse:
         log.error("database unavailable: %s", type(exc).__name__)
@@ -362,6 +429,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         log.warning("query cancelled (statement_timeout)")
         return JSONResponse(
             status_code=503,
+            headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
             content={"detail": "Pencarian terlalu lama. Persempit filter lalu coba lagi."},
         )
 

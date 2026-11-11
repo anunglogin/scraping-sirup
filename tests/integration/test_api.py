@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -147,9 +149,7 @@ def test_filters_combined(client, seeded):
 def test_like_wildcards_are_literal(client, seeded):
     assert ids(search(client, paket="100%")) == [4]
     assert ids(search(client, paket="Paket_khusus")) == [6]
-    assert ids(search(client, paket="%%%")) == []
-    assert ids(search(client, paket="___")) == []
-    assert ids(search(client, paket="\\\\\\")) == []
+    assert ids(search(client, paket="ket_kh")) == [6]
 
 
 def test_default_aktif_hides_inactive(client, seeded):
@@ -190,6 +190,17 @@ def test_default_page_size_and_fields(client, seeded):
         {"pemilihan_bulan": 13},
         {"pemilihan_bulan": 0},
         {"paket": "ab"},
+        {"paket": "%%%"},
+        {"paket": "___"},
+        {"paket": "..."},
+        {"paket": "a.."},
+        {"paket": "e%%"},
+        {"paket": "ab.cd"},
+        {"paket": "\U0001f642\U0001f642\U0001f642"},
+        {"paket": "abc\x00def"},
+        {"paket": "lap\ttop kantor"},
+        {"satuan_kerja": "..."},
+        {"satuan_kerja": "di\x7fnas"},
         {"paket": "  ab  "},
         {"paket": "x" * 101},
         {"satuan_kerja": "ab"},
@@ -317,3 +328,79 @@ def test_last_reachable_page_when_capped(client, many):
 def test_openapi_documents_total_terbatas(client):
     props = client.get("/openapi.json").json()["components"]["schemas"]["PaketPage"]["properties"]
     assert "lebih dari 10.000" in props["total_terbatas"]["description"]
+
+
+# ------------------------------------------------------- overload (F-01)
+@pytest.mark.parametrize("bad", ["%%%", "a..", "\U0001f642\U0001f642\U0001f642", "abc\x00"])
+def test_untrigrammable_keywords_rejected_fast(client, seeded, bad):
+    started = time.perf_counter()
+    resp = search(client, paket=bad)
+    assert resp.status_code == 422
+    assert time.perf_counter() - started < 1
+    msg = resp.json()["detail"][0]["msg"]
+    assert "3 huruf/angka" in msg or "karakter kontrol" in msg
+
+
+def test_search_slots_full_returns_429_but_health_and_detail_work(db_url, seeded):
+    settings = ApiSettings(
+        database_url=db_url, api_keys=KEY, search_max_concurrent=1, search_queue_wait_seconds=0.2
+    )
+    app = create_app(settings)
+    with TestClient(app) as c:
+        slots = app.state.search_slots
+        assert slots.acquire(timeout=1)  # simulate one long-running search
+        try:
+            resp = c.get("/v1/paket", params={"tahun": 2026}, headers=H)
+            assert resp.status_code == 429
+            assert resp.headers["Retry-After"] == "2"
+            assert "Terlalu banyak" in resp.json()["detail"]
+            assert c.get("/health").status_code == 200
+            assert c.get("/v1/paket/1", headers=H).status_code == 200
+        finally:
+            slots.release()
+        assert c.get("/v1/paket", params={"tahun": 2026}, headers=H).status_code == 200
+
+
+def test_concurrent_slow_searches_do_not_starve_pool(db_url, seeded, monkeypatch):
+    """Real threads + real slow SQL: excess searches get 429, /health stays up."""
+    from psycopg import sql
+
+    import sirup.api.main as main_mod
+
+    def slow_count(f, cap):
+        return sql.SQL("SELECT count(*) FROM (SELECT pg_sleep(0.8)) AS s"), []
+
+    monkeypatch.setattr(main_mod, "count_query", slow_count)
+    settings = ApiSettings(
+        database_url=db_url,
+        api_keys=KEY,
+        db_pool_max_size=4,
+        search_queue_wait_seconds=0.1,
+    )  # 4 - 2 = 2 search slots
+    app = create_app(settings)
+    codes: list[int] = []
+    with TestClient(app) as c:
+
+        def one() -> None:
+            codes.append(c.get("/v1/paket", params={"tahun": 2026}, headers=H).status_code)
+
+        threads = [threading.Thread(target=one) for _ in range(8)]
+        for t in threads:
+            t.start()
+        time.sleep(0.3)
+        health_started = time.perf_counter()
+        health = c.get("/health")
+        health_secs = time.perf_counter() - health_started
+        detail = c.get("/v1/paket/3", headers=H)
+        for t in threads:
+            t.join()
+    assert health.status_code == 200 and health_secs < 1
+    assert detail.status_code == 200
+    assert codes.count(200) >= 2 and codes.count(429) >= 1
+    assert set(codes) <= {200, 429}
+
+
+def test_statement_timeout_default_is_3s():
+    s = ApiSettings(database_url="postgresql://x@y/z", api_keys="k" * 24)
+    assert s.db_statement_timeout_ms == 3000
+    assert s.search_slots() == 8
