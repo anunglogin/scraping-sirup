@@ -242,7 +242,8 @@ docker compose --profile inaproc run --rm inaproc
 - Pengaturan ada di `.env`: `INAPROC_TAHUN`, `INAPROC_LIMIT`, `INAPROC_MAX_PAGES`
   (bawaan 10 halaman, 0 = sampai habis; `INAPROC_LIMIT` bawaan 100 baris per halaman, maksimum situs), dan `INAPROC_DELAY_SECONDS` (jeda antarhalaman,
   bawaan 2 detik).
-- Hasil juga masuk ke tabel database `inaproc_rup` (lihat TD-09). Untuk memasukkan
+- Hasil juga masuk ke tabel database `inaproc_rup` (TD-09) dan digabung ke `paket`
+  dengan kolom `sumber` (TD-10), sehingga bisa dicari lewat `/v1/paket?sumber=inaproc`. Untuk memasukkan
   file yang sudah ada: `docker compose --profile inaproc run --rm inaproc python -m sirup.inaproc load`.
 - Kode keluar: 0 = selesai, 1 = error, 2 = **situs menolak (401/403)**. Kalau ditolak,
   pengambil langsung berhenti tanpa mencoba ulang.

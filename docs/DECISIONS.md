@@ -224,6 +224,27 @@
      tiap halaman juga di-upsert ke database **sebelum** posisi halaman disimpan, jadi
      kalau database gagal, halaman itu diambil ulang pada jalan berikutnya.
   4. File yang sudah ada dimasukkan dengan `python -m sirup.inaproc load [FILE]`.
-  5. API belum membaca tabel ini (peran baca-saja API tidak diberi akses).
+  5. API membaca tabel ini lewat `/v1/paket` (lihat TD-10).
 - **Rollback:** `alembic downgrade 0005` menghapus tabel `inaproc_rup` saja.
 - **Biaya:** Rp0 (database yang sama).
+
+## TD-10 — Kolom `paket.sumber`: SIRUP, INAPROC, atau keduanya
+- **Tanggal:** 11 Nov 2026 · **Status:** Berlaku
+- **Konteks:** Bos meminta paket dari INAPROC ikut tampil di API `/v1/paket`, dengan
+  penanda sumber datanya. Bos memilih: satu baris per kode RUP, sumbernya bisa dua.
+- **Keputusan:**
+  1. Migrasi 0007 menambah `paket.sumber` (daftar teks). Baris lama otomatis `{sirup}`.
+     Nilai yang boleh: `sirup`, `inaproc`. Sumber baru perlu migrasi tambahan.
+  2. **SIRUP jadi acuan isi paket.** INAPROC hanya menambah tanda `inaproc` pada paket
+     yang sudah ada. Paket yang tidak ada di SIRUP ditambahkan sebagai `{inaproc}` dan
+     isinya diperbarui setiap pengambilan INAPROC. Kalau paket itu kemudian muncul di
+     SIRUP, isinya diganti data SIRUP dan sumbernya menjadi keduanya.
+  3. Scraper SIRUP hanya menandai "tidak aktif" paket yang sumbernya memuat `sirup`.
+     Paket yang hanya ada di INAPROC tidak pernah dinonaktifkan oleh SIRUP.
+  4. API: kolom `sumber` di setiap paket, filter `sumber=sirup|inaproc`. Detail paket
+     yang hanya ada di INAPROC menampilkan baris asli dari `inaproc_rup`.
+  5. Paket yang hanya ada di INAPROC tidak punya bulan pemilihan, lokasi, dan kode
+     satker; filter `pemilihan` tidak akan menemukannya.
+- **Rollback:** `alembic downgrade 0006` menghapus kolom dan paket yang hanya dari
+  INAPROC (salinannya tetap ada di `inaproc_rup`).
+- **Biaya:** Rp0.
