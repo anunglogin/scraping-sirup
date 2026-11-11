@@ -222,11 +222,34 @@ Bisa dilihat juga lewat `GET /v1/scrape-runs`.
 
 ---
 
-## Sumber lain: data.inaproc.id (tidak dipakai)
+## Sumber lain: data.inaproc.id (pengambil opsional)
 
 Dashboard [data.inaproc.id/rup](https://data.inaproc.id/rup) menampilkan data RUP yang
-sama dengan SIRUP. Endpoint di baliknya (`/dashboard-api/rup/table`) **tidak diambil**
-oleh proyek ini:
+sama dengan SIRUP. Endpoint di baliknya adalah `/dashboard-api/rup/table`. Ada pengambil
+opsional untuk endpoint itu (`src/sirup/inaproc`). Pengambil ini **tidak terjadwal** dan
+tidak ikut menyala saat `docker compose up`.
+
+```bash
+docker compose --profile inaproc run --rm inaproc
+```
+
+- Yang dikirim: `tahun`, `limit`, `cursor` (halaman berikutnya), dan header
+  `x-request-time` (waktu sekarang dalam milidetik). Tidak ada `x-secret`, cookie browser,
+  atau trik anti-bot.
+- Hasil ada di `output/inaproc/`: `rup_<tahun>.jsonl`, `rup_<tahun>.csv` (bisa dibuka di
+  Excel), dan `state_<tahun>.json` (posisi halaman berikutnya). Kalau dijalankan lagi,
+  pengambil melanjutkan dari posisi terakhir.
+- Pengaturan ada di `.env`: `INAPROC_TAHUN`, `INAPROC_LIMIT`, `INAPROC_MAX_PAGES`
+  (bawaan 10 halaman, 0 = sampai habis; `INAPROC_LIMIT` bawaan 100 baris per halaman, maksimum situs), dan `INAPROC_DELAY_SECONDS` (jeda antarhalaman,
+  bawaan 2 detik).
+- Kode keluar: 0 = selesai, 1 = error, 2 = **situs menolak (401/403)**. Kalau ditolak,
+  pengambil langsung berhenti tanpa mencoba ulang.
+
+> **Status per 11 Nov 2026:** situs menolak permintaan seperti ini dengan
+> `403 {"error":"Forbidden."}`. Pengambil baru menghasilkan data kalau INAPROC membuka
+> akses atau memberi akses resmi (lihat di bawah).
+
+### Kenapa pengaman situs tidak ditembus
 
 - Permintaan dari program dibalas **HTTP 403** (dicek 11 Nov 2026). Situs memasang
   perlindungan anti-bot Cloudflare (cookie `__cf_bm`) dan kode `x-secret` yang dibuat di

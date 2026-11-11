@@ -186,3 +186,27 @@
   F-06 role non-superuser, F-07 lockfile/pin digest, F-08 backup di luar VPS, F-09/D1
   pencarian gabungan, F-13 pengetatan CI, F-15 batas memori, F-16 header di API sendiri.
 - **Biaya:** Rp0 (domain opsional untuk HTTPS).
+
+## TD-08 — Pengambil opsional data.inaproc.id tanpa menembus pengaman
+- **Tanggal:** 11 Nov 2026 · **Status:** Berlaku
+- **Konteks:** Bos meminta data diambil dari `data.inaproc.id/dashboard-api/rup/table`.
+  Situs itu memakai Cloudflare dan header `x-secret`. Permintaan dengan `x-secret` acak
+  ataupun tanpa `x-secret` (hanya `x-request-time`) sama-sama dibalas
+  `403 {"error":"Forbidden."}`.
+- **Keputusan:**
+  1. Modul `sirup.inaproc` hanya mengirim `tahun`, `limit`, `cursor`, dan header
+     `x-request-time`. Tidak ada `x-secret`, cookie browser, penyamaran browser, atau
+     trik menembus tantangan anti-bot.
+  2. Jawaban 401/403 berarti berhenti (kode keluar 2), tanpa mencoba ulang. 429/5xx dicoba
+     ulang paling banyak 3 kali. Jeda antarhalaman minimal 0,5 detik (bawaan 2 detik).
+  3. Hasil ditulis ke file (`output/inaproc/`), tidak ke database. Struktur tabel `paket`
+     tidak berubah.
+  4. Header rahasia atau kunci API baru boleh ditambahkan kalau ada izin tertulis atau
+     akses resmi dari LKPP/INAPROC (disimpan di `docs/`). Nilainya disimpan di `.env`,
+     tidak di kode.
+- **Biaya:** Rp0.
+- **Pembaruan 11 Nov 2026:** Bos menyatakan ada izin tertulis dari INAPROC/LKPP untuk
+  memakai pasangan header `x-secret` + `x-request-time`. Nilainya dipindah dari kode ke
+  `.env` (`INAPROC_X_SECRET`, `INAPROC_REQUEST_TIME`); kalau kosong, header tidak dikirim.
+  Batas bawaan per halaman dinaikkan ke 100 (maksimum situs). **Belum selesai:** salinan
+  surat izin wajib disimpan di `docs/` sesuai butir 4.
