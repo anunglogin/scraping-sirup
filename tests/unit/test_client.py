@@ -94,3 +94,20 @@ def test_wrong_shape_raises_format_error_without_retry(body):
     with pytest.raises(SirupFormatError):
         make_client().fetch_page(2026, 0, 10)
     assert route.call_count == 1
+
+
+@respx.mock
+def test_empty_page_before_records_total_is_retried_then_fails():
+    body = {"recordsTotal": 10000, "recordsFiltered": 10000, "draw": 1, "data": []}
+    route = respx.get(DEFAULT_BASE_URL).mock(return_value=httpx.Response(200, json=body))
+    with pytest.raises(SirupUnavailableError, match="empty page at start=5000"):
+        make_client(attempts=3).fetch_page(2026, 5000, 5000)
+    assert route.call_count == 3
+
+
+@respx.mock
+def test_empty_page_at_or_after_end_is_normal():
+    body = {"recordsTotal": 5000, "recordsFiltered": 5000, "draw": 1, "data": []}
+    route = respx.get(DEFAULT_BASE_URL).mock(return_value=httpx.Response(200, json=body))
+    assert make_client().fetch_page(2026, 5000, 5000).data == []
+    assert route.call_count == 1

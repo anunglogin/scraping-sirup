@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from sirup.scraper.client import Page, SirupClient
+from sirup.scraper.client import Page, SirupClient, check_not_truncated
 from sirup.scraper.config import ScraperSettings
 from sirup.scraper.models import validate_page
 from sirup.scraper.store import Store
@@ -66,6 +66,7 @@ def run_scrape(
         try:
             while True:
                 page = source.fetch_page(year, start, size)
+                check_not_truncated(page, start)  # also guards non-HTTP sources
                 checked = validate_page(page.data)
                 valid, invalid = checked.valid, checked.invalid
                 if invalid:

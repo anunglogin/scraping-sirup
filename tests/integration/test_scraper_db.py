@@ -302,3 +302,32 @@ def test_invalid_rows_are_logged_with_reason_and_ids(db, db_url, caplog):
     assert "2 of 10 rows invalid" in msg
     assert "pagu:value_error=1" in msg and "id:missing=1" in msg
     assert "sample_ids [1002, None]" in msg
+
+
+class TruncatingSource(FakeSource):
+    """Answers an empty page from ``empty_from`` on, while still claiming the full total."""
+
+    def __init__(self, rows: list[Any], empty_from: int) -> None:
+        super().__init__(rows)
+        self.empty_from = empty_from
+
+    def fetch_page(self, year: int, start: int, length: int) -> Page:
+        self.starts.append(start)
+        data = [] if start >= self.empty_from else self.rows[start : start + length]
+        return Page(recordsTotal=self.total, data=data)
+
+
+@pytest.mark.parametrize(("empty_from", "checkpoint"), [(10, 10), (20, 20)])  # mid, last page
+def test_empty_page_before_total_fails_run_and_keeps_checkpoint(db, db_url, empty_from, checkpoint):
+    data = rows(25)
+    run_scrape(settings(db_url), FakeSource(data))  # all 25 active
+    with pytest.raises(SirupUnavailableError, match="empty page"):
+        run_scrape(settings(db_url), TruncatingSource(data, empty_from))
+    last = runs(db)[-1]
+    assert last["status"] == "failed" and "empty page" in last["error"]
+    assert last["checkpoint_start"] == checkpoint and last["rows_deactivated"] == 0
+    assert count(db, "is_active") == 25
+    source = FakeSource(data)  # SIRUP recovers: resume, not restart
+    run_scrape(settings(db_url), source)
+    assert source.starts[0] == checkpoint
+    assert runs(db)[-1]["status"] == "success"

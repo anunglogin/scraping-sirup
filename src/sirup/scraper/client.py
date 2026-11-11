@@ -47,6 +47,16 @@ class Page(BaseModel):
     data: list[Any]
 
 
+def check_not_truncated(page: Page, start: int) -> None:
+    """An empty page before recordsTotal is reached means SIRUP cut the data
+    short; treating it as "done" would end the run early and hide live
+    packages (review F-02). Raise the retryable error instead."""
+    if not page.data and start < page.records_total:
+        raise SirupUnavailableError(
+            f"empty page at start={start} although recordsTotal={page.records_total}"
+        )
+
+
 def build_params(year: int, start: int, length: int) -> dict[str, str]:
     """Query parameters. The ``order`` triple is mandatory: without it SIRUP
     answers HTTP 200 with an empty body."""
@@ -135,8 +145,10 @@ class SirupClient:
         except ValueError as exc:
             raise SirupUnavailableError("response is not valid JSON") from exc
         try:
-            return Page.model_validate(payload)
+            page = Page.model_validate(payload)
         except ValidationError as exc:
             raise SirupFormatError(
                 f"unexpected response shape (SIRUP format changed?): {exc.error_count()} errors"
             ) from exc
+        check_not_truncated(page, start)
+        return page
